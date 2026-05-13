@@ -42,6 +42,18 @@ body {
   background: #2a2a32;
 }
 
+/* Sidebar gets a thinner, more subtle scrollbar — only visible on hover. */
+.sidebar-nav::-webkit-scrollbar {
+  width: 4px;
+}
+.sidebar-nav::-webkit-scrollbar-thumb {
+  background: transparent;
+  transition: background 0.2s;
+}
+.sidebar-nav:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.06);
+}
+
 ::selection {
   background: rgba(255, 176, 32, 0.25);
   color: #fff;

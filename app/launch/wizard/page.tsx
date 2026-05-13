@@ -105,6 +105,10 @@ function Inner() {
     setPhases((cur) => cur.map((p) => (p.key === key ? { ...p, ...patch } : p)));
   }
 
+  // 90s per-phase ceiling. If a provider stalls (e.g. Groq queueing) the
+  // user is told instead of staring at a spinner forever.
+  const PHASE_TIMEOUT_MS = 90_000;
+
   async function runOnePhase(args: {
     key: string;
     label: string;
@@ -113,9 +117,17 @@ function Inner() {
     expectJson?: boolean;
     signal?: AbortSignal;
   }): Promise<any> {
-    updatePhase(args.key, { status: "running", text: "" });
+    updatePhase(args.key, { status: "running", text: "", error: undefined });
     const system = buildBrandSystemPrompt(brain, { language: getLanguage(), tone_override: getToneOverride() });
     let accumulated = "";
+
+    // Compose the wizard's master AbortSignal with a per-phase timeout signal.
+    // First of the two to abort wins.
+    const timeoutCtl = new AbortController();
+    const timeoutId = setTimeout(() => timeoutCtl.abort(new Error("Phase timed out after 90s")), PHASE_TIMEOUT_MS);
+    const signals = [args.signal, timeoutCtl.signal].filter(Boolean) as AbortSignal[];
+    const combined = anySignal(signals);
+
     try {
       const res = await llmStream(
         {
@@ -123,14 +135,11 @@ function Inner() {
           messages: [{ role: "user", content: args.prompt }],
           maxTokens: args.maxTokens,
           temperature: 0.7,
-          signal: args.signal,
+          signal: combined,
         },
         {
           onDelta: (delta) => {
             accumulated += delta;
-            // Throttle setPhases updates to ~every 200ms equivalent — render
-            // the latest accumulated text via functional update so it doesn't
-            // stall the UI on every token.
             updatePhase(args.key, { text: accumulated });
           },
         }
@@ -141,8 +150,134 @@ function Inner() {
       updatePhase(args.key, { status: "done", result: json, text: res.text });
       return { json, text: res.text, modelId: res.modelId, usage: res.usage, cost };
     } catch (e: any) {
-      updatePhase(args.key, { status: "error", error: e?.message ?? "Phase failed" });
+      const msg = timeoutCtl.signal.aborted ? "Timed out after 90s — provider stalled or model overloaded." : e?.message ?? "Phase failed";
+      updatePhase(args.key, { status: "error", error: msg });
       throw e;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /** Polyfill for AbortSignal.any — combine multiple signals into one. */
+  function anySignal(signals: AbortSignal[]): AbortSignal {
+    // Use the native AbortSignal.any when available (modern browsers).
+    if (typeof (AbortSignal as any).any === "function") {
+      return (AbortSignal as any).any(signals);
+    }
+    const ctl = new AbortController();
+    for (const s of signals) {
+      if (s.aborted) { ctl.abort((s as any).reason); break; }
+      s.addEventListener("abort", () => ctl.abort((s as any).reason), { once: true });
+    }
+    return ctl.signal;
+  }
+
+  /** Retry a single failed phase without re-running the whole wizard. */
+  async function retryPhase(phaseKey: string) {
+    if (!brain || !campaignId) return;
+    const common: LaunchWizardCommon = {
+      campaign_name: campaignName.trim(),
+      goal,
+      platforms,
+      budget_total: budget.trim(),
+      launch_date: launchDate,
+      duration,
+      notes: notes.trim() || undefined,
+    };
+    // Pull the strategy brief from completed phases (or re-run nothing if it's missing).
+    const strat = phases.find((p) => p.key === "strategy")?.result ?? {};
+    const ctl = new AbortController();
+    setRunning(true);
+    try {
+      let built: { prompt: string; max: number } | null = null;
+      switch (phaseKey) {
+        case "strategy":
+          built = { prompt: buildStrategyBriefPrompt(common), max: 1200 };
+          break;
+        case "kit":
+          built = {
+            prompt: buildCampaignKitPrompt({
+              campaign_name: common.campaign_name,
+              product: brain.business_name,
+              primary_offer: brain.usp || strat.big_idea || "",
+              audience: brain.audience_who || "",
+              goal: common.goal,
+              budget_monthly: common.budget_total,
+            } as any),
+            max: 5500,
+          };
+          break;
+        case "calendar":
+          built = {
+            prompt: buildContentCalendarPrompt({
+              duration: common.duration,
+              cadence_per_week: 4,
+              platforms: platforms.join(", "),
+              pillars: (brain.content_pillars ?? []).join(" · ") || "Founder stories · Product education · Customer wins · Behind the scenes",
+              primary_goal: common.goal,
+              voice_notes: brain.tone || "(use brand brain)",
+              posting_window: "anytime",
+              region_or_timezone: brain.audience_demographics || "(unspecified)",
+            } as any),
+            max: 6500,
+          };
+          break;
+        case "email":
+          built = {
+            prompt: buildEmailSequencePrompt({
+              ...common,
+              big_idea: strat.big_idea ?? "",
+              positioning_one_liner: strat.positioning_one_liner ?? "",
+              primary_cta: strat.primary_cta ?? "",
+            }),
+            max: 2500,
+          };
+          break;
+        case "social":
+          built = {
+            prompt: buildLaunchDayPostsPrompt({
+              ...common,
+              big_idea: strat.big_idea ?? "",
+              positioning_one_liner: strat.positioning_one_liner ?? "",
+              proof_points: strat.proof_points ?? [],
+            }),
+            max: 3500,
+          };
+          break;
+      }
+      if (!built) return;
+      const result = await runOnePhase({
+        key: phaseKey,
+        label: phaseKey,
+        prompt: built.prompt,
+        maxTokens: built.max,
+        signal: ctl.signal,
+      });
+      // Persist the retried phase against the existing campaign.
+      const labels: Record<string, [GeneratedAd["platform"], string]> = {
+        strategy: ["google", "Launch Strategy"],
+        kit: ["google", "Campaign Kit"],
+        calendar: ["meta", "Content Calendar"],
+        email: ["google", "Email Sequence"],
+        social: ["meta", "Launch-Day Social"],
+      };
+      const [plat, ctype] = labels[phaseKey];
+      await persistAsAd({
+        campaign_id: campaignId,
+        platform: plat,
+        campaign_type: ctype,
+        title: `${ctype} · ${campaignName.trim()}`,
+        input: common as any,
+        output_json: result.json,
+        output_text: result.text,
+        modelId: result.modelId,
+        usage: result.usage,
+        cost: result.cost,
+      });
+    } catch {
+      /* updatePhase already set status="error" */
+    } finally {
+      setRunning(false);
     }
   }
 
@@ -494,7 +629,7 @@ function Inner() {
           ) : (
             <div className="space-y-3">
               {phases.map((p) => (
-                <PhaseCard key={p.key} phase={p} />
+                <PhaseCard key={p.key} phase={p} onRetry={running ? undefined : () => retryPhase(p.key)} />
               ))}
               {!running && phases.every((p) => p.status === "done" || p.status === "error") ? (
                 <FinalSummary phases={phases} campaignId={campaignId} />
@@ -507,7 +642,7 @@ function Inner() {
   );
 }
 
-function PhaseCard({ phase }: { phase: Phase }) {
+function PhaseCard({ phase, onRetry }: { phase: Phase; onRetry?: () => void }) {
   const Icon =
     phase.status === "done" ? Check : phase.status === "running" ? Loader2 : phase.status === "error" ? X : null;
   return (
@@ -532,7 +667,17 @@ function PhaseCard({ phase }: { phase: Phase }) {
       </summary>
       <div className="px-4 pb-4 pt-2">
         {phase.status === "error" ? (
-          <p className="text-xs text-neg">{phase.error}</p>
+          <div className="space-y-2">
+            <p className="text-xs text-neg">{phase.error}</p>
+            {onRetry ? (
+              <button
+                onClick={onRetry}
+                className="text-[11px] font-mono uppercase tracking-ui-wide text-live hover:text-live/80 transition flex items-center gap-1.5"
+              >
+                ↻ retry this phase
+              </button>
+            ) : null}
+          </div>
         ) : phase.text ? (
           <div className="space-y-2">
             <div className="flex justify-end">

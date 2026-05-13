@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Plus, Trash2, FolderOpen, Loader2 } from "lucide-react";
+import { Plus, Trash2, FolderOpen, Loader2, Download } from "lucide-react";
 import { ApiKeyGate } from "@/components/ApiKeyGate";
 import { PageHeader } from "@/components/PageHeader";
 import { Section, Pill } from "@/components/OutputBlocks";
@@ -69,6 +69,40 @@ function Inner() {
 
   function adsFor(campaign_id: string) {
     return ads.filter((a) => a.campaign_id === campaign_id);
+  }
+
+  function exportCampaign(c: Campaign) {
+    const items = adsFor(c.id);
+    if (!items.length) return;
+    const created = new Date(c.created_at).toLocaleString();
+    const lines: string[] = [
+      `# ${c.name}`,
+      ``,
+      `**Status:** ${c.status} · **Goal:** ${c.goal || "—"} · **Created:** ${created}`,
+      c.notes ? `\n${c.notes}\n` : "",
+      `---`,
+      ``,
+    ];
+    for (const a of items) {
+      lines.push(`## ${a.title}`);
+      lines.push(``);
+      lines.push(`> ${a.platform} · ${a.campaign_type} · ${a.status} · ${new Date(a.created_at).toLocaleDateString()} · $${(a.cost_usd ?? 0).toFixed(4)}`);
+      lines.push(``);
+      if (a.notes) lines.push(`_${a.notes}_\n`);
+      lines.push("```");
+      lines.push(a.output_text);
+      lines.push("```");
+      lines.push(``);
+      lines.push(`---`);
+      lines.push(``);
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${c.name.replace(/[^a-z0-9-_ ]/gi, "_")}-${Date.now()}.md`;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -146,6 +180,14 @@ function Inner() {
                         {s}
                       </button>
                     ))}
+                    <button
+                      onClick={() => exportCampaign(c)}
+                      disabled={items.length === 0}
+                      className="btn-ghost disabled:opacity-30"
+                      title={items.length ? `Download all ${items.length} assets as one markdown file` : "No assets to export"}
+                    >
+                      <Download size={11} />
+                    </button>
                     <button
                       onClick={async () => {
                         await deleteCampaign(c.id);

@@ -93,6 +93,25 @@ function HistoryInner() {
 
   const activeBrand = brains.find((b) => b.id === activeBrandId);
 
+  // Per-brand cost rollup over the visible (filtered) set + last-30-days slice.
+  // Agencies running N clients can see at a glance which client is consuming
+  // the most token budget this month.
+  const perBrandCost = useMemo(() => {
+    const monthAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const rows = new Map<string, { brain_id: string; name: string; total: number; last30: number; count: number; tokens: number }>();
+    for (const a of ads) {
+      const brain = brains.find((b) => b.id === a.brand_id);
+      const name = brain?.name || brain?.business_name || "(no client)";
+      const cur = rows.get(a.brand_id) ?? { brain_id: a.brand_id, name, total: 0, last30: 0, count: 0, tokens: 0 };
+      cur.total += a.cost_usd ?? 0;
+      cur.count += 1;
+      cur.tokens += (a.usage_input_tokens ?? 0) + (a.usage_output_tokens ?? 0);
+      if (a.created_at >= monthAgo) cur.last30 += a.cost_usd ?? 0;
+      rows.set(a.brand_id, cur);
+    }
+    return Array.from(rows.values()).sort((a, b) => b.last30 - a.last30);
+  }, [ads, brains]);
+
   function download(name: string, content: string, type: string) {
     const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);
@@ -153,6 +172,42 @@ function HistoryInner() {
         title="History"
         subtitle={`${ads.length} generation${ads.length === 1 ? "" : "s"} stored in this browser. Tag with status, star winners, export anywhere.`}
       />
+
+      {perBrandCost.length > 1 ? (
+        <details className="mb-3 border border-base-600 bg-base-900/40 group">
+          <summary className="cursor-pointer list-none flex items-center gap-2 px-3 py-2 hover:bg-base-800/40 transition">
+            <span className="text-[10px] font-mono uppercase tracking-ui-mega text-ink-faint">Spend by client · last 30d</span>
+            <span className="flex-1" />
+            <span className="text-[11px] tabular text-ink">
+              total ${perBrandCost.reduce((s, r) => s + r.last30, 0).toFixed(2)}
+            </span>
+            <span className="text-[10px] text-ink-faint font-mono uppercase tracking-ui-wide group-open:hidden">show</span>
+            <span className="text-[10px] text-ink-faint font-mono uppercase tracking-ui-wide hidden group-open:inline">hide</span>
+          </summary>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-[9px] font-mono uppercase tracking-ui-mega text-ink-faint border-t border-base-700">
+                <th className="text-left px-3 py-1.5 font-normal">client</th>
+                <th className="text-right px-3 py-1.5 font-normal">last 30d</th>
+                <th className="text-right px-3 py-1.5 font-normal">all time</th>
+                <th className="text-right px-3 py-1.5 font-normal">runs</th>
+                <th className="text-right px-3 py-1.5 font-normal">tokens</th>
+              </tr>
+            </thead>
+            <tbody>
+              {perBrandCost.map((r) => (
+                <tr key={r.brain_id} className="border-t border-base-700/50 hover:bg-base-800/30">
+                  <td className="px-3 py-1.5 text-ink">{r.name}</td>
+                  <td className="px-3 py-1.5 text-right tabular text-pos">${r.last30.toFixed(2)}</td>
+                  <td className="px-3 py-1.5 text-right tabular text-ink-muted">${r.total.toFixed(2)}</td>
+                  <td className="px-3 py-1.5 text-right tabular text-ink-muted">{r.count}</td>
+                  <td className="px-3 py-1.5 text-right tabular text-ink-subtle">{r.tokens.toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      ) : null}
 
       <div className="flex items-center gap-2 mb-3 border border-base-600 bg-base-900/40 p-2">
         <span className="text-[10px] font-mono uppercase tracking-ui-mega text-ink-faint ml-1">scope:</span>
