@@ -82,6 +82,13 @@ npm run start:all      # web app + local-sync sidecar together
 
 > First launch walks you through a 5-step wizard: welcome → tour → pick AI provider → paste key → optional first brand. No accounts. No env vars. No database.
 
+### Pick your own port
+`install.bat` / `install.sh` ask which port you want and save it to `.env.local`. Defaults to **3005**. Pick anything 1024–65535 (avoid 80 unless you want admin rights).
+
+### Want a prettier URL?
+- **Zero setup:** open `http://adforge.localhost:3005/` instead of `http://localhost:3005/`. Works in Chrome / Firefox / Safari / Edge today — all modern browsers auto-resolve `*.localhost` to 127.0.0.1.
+- **Hosts-file option:** for `http://adforge.local/` with no port shown, run `scripts/set-domain.bat` (Windows, as admin) or `sudo bash scripts/set-domain.sh` (Mac/Linux). Full guide: [docs/CUSTOM_DOMAIN.md](docs/CUSTOM_DOMAIN.md).
+
 ### Your data lives in this folder
 After install, **everything you do** (brand brains, generated ads, campaigns, checklists, performance logs) auto-saves to `data/snapshot.json` in the project folder.
 

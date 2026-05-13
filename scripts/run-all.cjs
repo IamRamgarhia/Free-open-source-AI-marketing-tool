@@ -3,6 +3,8 @@
  * Cross-platform launcher: runs the local-sync sidecar AND the Next.js dev server
  * in parallel. One Ctrl+C kills both cleanly.
  *
+ * Honors PORT + ADFORGE_SYNC_PORT from .env.local (or current env).
+ *
  * Used by:  npm run start:all
  *
  * If you'd rather use the OS-native scripts, run start.bat (Windows) or
@@ -17,31 +19,49 @@ const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DATA_DIR = path.join(PROJECT_ROOT, "data");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
+// Load .env.local if PORT not already in env
+function loadEnvLocal() {
+  const file = path.join(PROJECT_ROOT, ".env.local");
+  if (!fs.existsSync(file)) return;
+  const lines = fs.readFileSync(file, "utf8").split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq < 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const val = trimmed.slice(eq + 1).trim();
+    if (process.env[key] === undefined) process.env[key] = val;
+  }
+}
+loadEnvLocal();
+
+const PORT = process.env.PORT || "3005";
+const SYNC_PORT = process.env.ADFORGE_SYNC_PORT || "3006";
+
 const isWin = process.platform === "win32";
 const npx = isWin ? "npx.cmd" : "npx";
 
-console.log("[adforge] starting local-sync sidecar on http://127.0.0.1:3006");
+console.log(`[adforge] starting local-sync sidecar on http://127.0.0.1:${SYNC_PORT}`);
 const sync = spawn(process.execPath, [path.join(__dirname, "local-sync.cjs")], {
   cwd: PROJECT_ROOT,
   stdio: ["ignore", "inherit", "inherit"],
+  env: { ...process.env, ADFORGE_SYNC_PORT: SYNC_PORT },
 });
 
-console.log("[adforge] starting Next.js dev server on http://localhost:3005");
-const next = spawn(npx, ["next", "dev", "-p", "3005"], {
+console.log(`[adforge] starting Next.js dev server on http://localhost:${PORT}`);
+console.log(`[adforge] try also  http://adforge.localhost:${PORT}  — works in all modern browsers, zero setup`);
+const next = spawn(npx, ["next", "dev", "-p", PORT], {
   cwd: PROJECT_ROOT,
   stdio: ["ignore", "inherit", "inherit"],
   shell: isWin,
+  env: { ...process.env },
 });
 
 function shutdown(signal) {
   console.log(`\n[adforge] received ${signal} — stopping all processes`);
-  try {
-    sync.kill();
-  } catch {}
-  try {
-    next.kill();
-  } catch {}
-  // Give them a moment, then force exit
+  try { sync.kill(); } catch {}
+  try { next.kill(); } catch {}
   setTimeout(() => process.exit(0), 600);
 }
 
@@ -53,7 +73,6 @@ sync.on("exit", (code) => {
 });
 next.on("exit", (code) => {
   console.log(`[adforge] next dev exited with code ${code}`);
-  // If next dies, also stop sync
   try { sync.kill(); } catch {}
   process.exit(code ?? 0);
 });
