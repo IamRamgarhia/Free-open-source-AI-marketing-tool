@@ -13,6 +13,9 @@ export interface InputField {
   options?: { value: string; label: string }[];
   rows?: number;
   span?: 1 | 2; // grid columns
+  /** When set, the GeneratorShell renders a section heading above this field. Use the
+   *  same string on consecutive fields to keep them under one heading. */
+  section?: string;
 }
 
 export interface GeneratorConfig<I extends Record<string, unknown>> {

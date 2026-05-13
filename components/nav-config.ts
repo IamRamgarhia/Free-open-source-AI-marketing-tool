@@ -60,7 +60,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/optimize/quality-score", label: "Quality Score" },
       { href: "/optimize/budget", label: "Budget Waste" },
       { href: "/optimize/budget-planner", label: "Budget Planner" },
-      { href: "/optimize/cost-savers", label: "Cost-Saving Tips" },
       { href: "/optimize/ab-test", label: "A/B Test Planner" },
       { href: "/optimize/keywords", label: "Keyword Builder" },
       { href: "/optimize/audience", label: "Audience Targeting" },

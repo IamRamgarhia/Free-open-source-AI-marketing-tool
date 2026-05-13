@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Sparkles, Save, AlertTriangle, StopCircle } from "lucide-react";
 import { ApiKeyGate } from "@/components/ApiKeyGate";
 import { PageHeader } from "@/components/PageHeader";
@@ -195,14 +195,26 @@ function Inner<I extends Record<string, unknown>>({ config, scope }: Props<I>) {
             )}
 
             <div className="grid grid-cols-2 gap-3">
-              {config.fields.map((f) => (
-                <FieldRenderer
-                  key={f.name}
-                  field={f}
-                  value={(input as any)[f.name]}
-                  onChange={(v) => setField(f.name, v)}
-                />
-              ))}
+              {config.fields.map((f, i) => {
+                const prevSection = i > 0 ? config.fields[i - 1].section : undefined;
+                const showHeading = f.section && f.section !== prevSection;
+                return (
+                  <Fragment key={f.name}>
+                    {showHeading ? (
+                      <div className="col-span-2 mt-2 first:mt-0">
+                        <div className="text-[10px] font-mono uppercase tracking-ui-mega text-live pb-1 border-b border-base-700">
+                          {f.section}
+                        </div>
+                      </div>
+                    ) : null}
+                    <FieldRenderer
+                      field={f}
+                      value={(input as any)[f.name]}
+                      onChange={(v) => setField(f.name, v)}
+                    />
+                  </Fragment>
+                );
+              })}
             </div>
 
             {error ? (
