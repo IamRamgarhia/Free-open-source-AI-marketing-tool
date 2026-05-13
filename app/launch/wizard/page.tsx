@@ -7,8 +7,9 @@ import { ApiKeyGate } from "@/components/ApiKeyGate";
 import { PageHeader } from "@/components/PageHeader";
 import { Section, Pill } from "@/components/OutputBlocks";
 import { CopyButton } from "@/components/CopyButton";
-import { getActiveBrainId, addUsage, getLanguage, getToneOverride } from "@/lib/settings";
+import { getActiveBrainId, addUsage, getLanguage, getToneOverride, getActiveProviderId, getProvidersWithKeys, getProviderKey } from "@/lib/settings";
 import { llmStream, estimateCostUsd, tryParseJson } from "@/lib/llm";
+import { getProvider } from "@/lib/providers";
 import { getBrain, saveAd, saveCampaign, type Campaign, type GeneratedAd } from "@/lib/storage";
 import { buildBrandSystemPrompt, type BrandBrain } from "@/lib/brand-brain";
 import { buildCampaignKitPrompt } from "@/lib/prompts/campaign-kit";
@@ -150,7 +151,67 @@ function Inner() {
       updatePhase(args.key, { status: "done", result: json, text: res.text });
       return { json, text: res.text, modelId: res.modelId, usage: res.usage, cost };
     } catch (e: any) {
-      const msg = timeoutCtl.signal.aborted ? "Timed out after 90s — provider stalled or model overloaded." : e?.message ?? "Phase failed";
+      // The user pressed Stop — surface no failover, no error spam.
+      if (args.signal?.aborted) {
+        updatePhase(args.key, { status: "error", error: "Cancelled." });
+        throw e;
+      }
+
+      const wasTimeout = timeoutCtl.signal.aborted;
+
+      // Auto-failover: if the active provider timed out and another provider
+      // has a saved key, retry the phase with that provider once. Don't loop
+      // through all 9 — that would mask real failures behind huge delays.
+      if (wasTimeout) {
+        const active = getActiveProviderId();
+        const fallbackId = getProvidersWithKeys().find((id) => id !== active);
+        const fallbackProvider = fallbackId ? getProvider(fallbackId) : null;
+        if (fallbackProvider) {
+          const fallbackKey = getProviderKey(fallbackId!);
+          updatePhase(args.key, {
+            status: "running",
+            text: `[Active provider stalled — retrying with fallback: ${fallbackProvider.name}]\n\n`,
+          });
+          accumulated = `[Active provider stalled — retrying with fallback: ${fallbackProvider.name}]\n\n`;
+          const fallbackCtl = new AbortController();
+          const fallbackTimeoutId = setTimeout(
+            () => fallbackCtl.abort(new Error("Fallback also timed out after 90s")),
+            PHASE_TIMEOUT_MS
+          );
+          try {
+            const res = await llmStream(
+              {
+                system,
+                messages: [{ role: "user", content: args.prompt }],
+                maxTokens: args.maxTokens,
+                temperature: 0.7,
+                signal: fallbackCtl.signal,
+                providerOverride: fallbackProvider,
+                apiKeyOverride: fallbackKey,
+              },
+              {
+                onDelta: (delta) => {
+                  accumulated += delta;
+                  updatePhase(args.key, { text: accumulated });
+                },
+              }
+            );
+            const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
+            addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+            const json = args.expectJson === false ? null : tryParseJson<any>(res.text);
+            updatePhase(args.key, { status: "done", result: json, text: res.text });
+            return { json, text: res.text, modelId: res.modelId, usage: res.usage, cost };
+          } catch {
+            // fall through to error state below
+          } finally {
+            clearTimeout(fallbackTimeoutId);
+          }
+        }
+      }
+
+      const msg = wasTimeout
+        ? "Timed out after 90s on the primary provider. Failover provider also failed or none configured. Use ↻ retry, or switch provider in Settings."
+        : e?.message ?? "Phase failed";
       updatePhase(args.key, { status: "error", error: msg });
       throw e;
     } finally {

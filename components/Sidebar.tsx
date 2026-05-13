@@ -147,7 +147,7 @@ export function Sidebar() {
                 )}
               >
                 <div className="mt-0.5 mb-1 space-y-px">
-                  {g.items.map((item) => {
+                  {g.items.map((item, itemIdx) => {
                     const active =
                       path === item.href || (item.href !== "/" && path?.startsWith(item.href));
                     const href = item.query ? `${item.href}?${item.query}` : item.href;
@@ -156,8 +156,13 @@ export function Sidebar() {
                       <Link
                         key={linkKey}
                         href={href}
+                        // Staggered fade-up: each item enters 25ms after the previous one
+                        // when the group opens. Hard-cap at 8 items of stagger so groups
+                        // with 12+ tools don't have a noticeable tail.
+                        style={isOpen ? { animationDelay: `${Math.min(itemIdx, 8) * 25}ms` } : undefined}
                         className={cn(
                           "group relative flex items-center gap-2 pl-7 pr-3 py-1.5 text-[13px] transition-colors",
+                          isOpen && "animate-fade-up",
                           active
                             ? "text-ink bg-gradient-to-r from-live/[0.08] to-transparent font-medium"
                             : "text-ink-muted hover:text-ink hover:bg-base-900/40"

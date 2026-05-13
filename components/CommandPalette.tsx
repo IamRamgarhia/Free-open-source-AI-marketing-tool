@@ -2,7 +2,25 @@
 
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Search, ArrowRight, Brain, Sparkles, Activity, Target, BookOpen, Settings, History, FileBarChart, Calendar, Rocket } from "lucide-react";
+import {
+  Search,
+  ArrowRight,
+  Brain,
+  Sparkles,
+  Facebook,
+  Search as GoogleIcon,
+  Music2,
+  Linkedin,
+  Youtube,
+  Twitter,
+  Mail,
+  Microscope,
+  CalendarDays,
+  GraduationCap,
+  Database,
+  History,
+  Zap,
+} from "lucide-react";
 import { NAV_GROUPS } from "./nav-config";
 import { listBrains, listAds } from "@/lib/storage";
 import { getActiveBrainId, setActiveBrainId } from "@/lib/settings";
@@ -69,27 +87,63 @@ export function CommandPalette() {
 
   const actions = useMemo<Action[]>(() => {
     const groupIconMap: Record<string, any> = {
-      Overview: Sparkles,
-      Generate: Sparkles,
-      Research: Target,
-      Optimize: Activity,
-      Routines: Calendar,
-      Strategy: Rocket,
-      Learn: BookOpen,
-      Data: Settings,
+      "Start here": Sparkles,
+      "Meta · Facebook + Instagram": Facebook,
+      "Google · Search + PMax + Shopping": GoogleIcon,
+      "TikTok": Music2,
+      "LinkedIn · B2B": Linkedin,
+      "YouTube": Youtube,
+      "X · Twitter": Twitter,
+      "Email + Display": Mail,
+      "Research & Insights": Microscope,
+      "Routines": CalendarDays,
+      "Learn": GraduationCap,
+      "Data": Database,
     };
+    // Dedup cross-platform tools: a single tool listed under multiple platform
+    // groups should appear once in the palette. Keep the first occurrence's
+    // group label so users still get a sensible category, but suppress repeats.
+    const seenHrefs = new Set<string>();
     const nav: Action[] = NAV_GROUPS.flatMap((g) =>
-      g.items.map<Action>((item) => ({
-        id: `nav:${item.href}`,
-        label: item.label,
-        group: g.title,
-        icon: groupIconMap[g.title] ?? ArrowRight,
-        run: () => {
-          router.push(item.href);
-          setOpen(false);
-        },
-      }))
+      g.items
+        .filter((item) => {
+          const key = item.href + (item.query ?? "");
+          if (seenHrefs.has(key)) return false;
+          seenHrefs.add(key);
+          return true;
+        })
+        .map<Action>((item) => ({
+          id: `nav:${g.title}::${item.href}::${item.query ?? ""}`,
+          label: item.label,
+          group: g.title,
+          icon: groupIconMap[g.title] ?? ArrowRight,
+          run: () => {
+            const href = item.query ? `${item.href}?${item.query}` : item.href;
+            router.push(href);
+            setOpen(false);
+          },
+        }))
     );
+
+    // Quick actions — flagship features that deserve top-of-mind discovery.
+    const quickActions: Action[] = [
+      {
+        id: "quick:wizard",
+        label: "Build a 10-minute launch kit",
+        hint: "5 chained AI generations → one Campaign",
+        group: "Quick actions",
+        icon: Zap,
+        run: () => { router.push("/launch/wizard"); setOpen(false); },
+      },
+      {
+        id: "quick:batch",
+        label: "Multi-client batch generate",
+        hint: "Same asset across N clients in parallel",
+        group: "Quick actions",
+        icon: Zap,
+        run: () => { router.push("/batch"); setOpen(false); },
+      },
+    ];
 
     const brainActions: Action[] = brains.map((b) => ({
       id: `brain:${b.id}`,
@@ -111,12 +165,13 @@ export function CommandPalette() {
       group: "Recent history",
       icon: History,
       run: () => {
-        router.push(`/history#${a.id}`);
+        // /history?focus=<id> auto-expands + scrolls + ring-highlights the row.
+        router.push(`/history?focus=${a.id}`);
         setOpen(false);
       },
     }));
 
-    return [...nav, ...brainActions, ...recentActions];
+    return [...quickActions, ...brainActions, ...recentActions, ...nav];
   }, [brains, recent, router]);
 
   const filtered = useMemo(() => {
