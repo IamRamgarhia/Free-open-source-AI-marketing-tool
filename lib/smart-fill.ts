@@ -30,8 +30,30 @@ export function suggestFromBrain(field: InputField, brain: BrandBrain | null): s
   if (n === "competitor_name" && brain.competitors?.length) return brain.competitors[0];
   if (n === "competitors" && brain.competitors?.length) return brain.competitors.join(", ");
 
-  // Pillars (content calendar)
-  if (n === "pillars" && brain.key_messages?.length) return brain.key_messages.join(" · ");
+  // Platforms — prefer brain.platforms; downstream forms use comma-separated.
+  if (n === "platforms" || n === "platform_list" || n === "social_platforms") {
+    if (brain.platforms?.length) return brain.platforms.join(", ");
+  }
+
+  // Content pillars — prefer brain.content_pillars; fall back to key_messages.
+  if (n === "pillars" || n === "content_pillars" || n === "themes") {
+    if (brain.content_pillars?.length) return brain.content_pillars.join(" · ");
+    if (brain.key_messages?.length) return brain.key_messages.join(" · ");
+  }
+
+  // Niche — more specific than industry. Falls back to industry.
+  if (n === "niche") return brain.niche || brain.industry || "";
+
+  // Products — comma-separated.
+  if (n === "products" || n === "product_list" || n === "offers") {
+    if (brain.products?.length) return brain.products.join(", ");
+  }
+
+  // Per-platform social handle fields (e.g. "instagram_handle", "tiktok_url").
+  const socialMatch = n.match(/^(instagram|tiktok|youtube|linkedin|twitter|facebook|pinterest|threads)(_handle|_url|_link)?$/);
+  if (socialMatch && brain.social_links) {
+    return (brain.social_links as any)[socialMatch[1]] || null;
+  }
 
   // CTA preference
   if (n === "cta" || n === "preferred_cta") return ""; // intentionally empty — too brand-specific
