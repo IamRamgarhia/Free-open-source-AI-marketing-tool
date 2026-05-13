@@ -38,6 +38,7 @@ export const NAV_GROUPS: NavGroup[] = [
     defaultOpen: true,
     items: [
       { href: "/generate/meta", label: "Meta Ads · Feed/Reels" },
+      { href: "/generate/reel-ideas", label: "Reel Ideas", query: "platform=instagram_reels" },
       { href: "/generate/lead-form", label: "Lead Form" },
       { href: "/generate/hashtags", label: "Hashtags" },
       { href: "/generate/content-calendar", label: "Content Calendar" },
@@ -71,6 +72,7 @@ export const NAV_GROUPS: NavGroup[] = [
     title: "TikTok",
     items: [
       { href: "/generate/tiktok", label: "TikTok In-Feed · Hooks/UGC" },
+      { href: "/generate/reel-ideas", label: "Reel Ideas", query: "platform=tiktok" },
       { href: "/generate/spark-ads", label: "Spark Ads" },
       { href: "/generate/branded-hashtag-challenge", label: "Branded Hashtag Challenge" },
       { href: "/generate/hashtags", label: "Hashtags" },
@@ -97,6 +99,7 @@ export const NAV_GROUPS: NavGroup[] = [
     title: "YouTube",
     items: [
       { href: "/generate/youtube", label: "YouTube · TrueView Scripts" },
+      { href: "/generate/reel-ideas", label: "Shorts Ideas", query: "platform=youtube_shorts" },
       { href: "/generate/hashtags", label: "Hashtags" },
       { href: "/generate/creative-prompts", label: "Image / Video Prompts" },
       { href: "/optimize/creative-score", label: "Creative Score" },

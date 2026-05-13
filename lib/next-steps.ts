@@ -36,6 +36,7 @@ export function suggestNextSteps(args: {
   // Platform-specific next-steps for new ad generations
   const byPlatform: Record<string, NextStep[]> = {
     meta: [
+      { href: "/generate/reel-ideas", label: "Reel ideas for this brand", reason: "Same pillars, hook-first variants for Reels", carry: { ...carry, platform: "instagram_reels" } },
       { href: "/optimize/creative-score", label: "Score the creative", reason: "Before you spend, predict performance" },
       { href: "/optimize/ctr", label: "CTR Optimizer", reason: "Tear down + rewrite specific levers", carry: { ...carry, platform: "Meta Feed" } },
       { href: "/generate/hashtags", label: "Generate hashtags", reason: "Layer in 5-10 niche hashtags" },
@@ -50,6 +51,7 @@ export function suggestNextSteps(args: {
       { href: "/optimize/ab-test", label: "Plan an A/B test", reason: "Test headline variants" },
     ],
     tiktok: [
+      { href: "/generate/reel-ideas", label: "Organic Reel ideas", reason: "Cheaper reach — generate 12 ideas using the same brand brain", carry: { ...carry, platform: "tiktok" } },
       { href: "/generate/spark-ads", label: "Spark Ads variant", reason: "Boost a creator post instead of running standalone" },
       { href: "/optimize/creative-score", label: "Score the creative", reason: "Hook-strength check before spend" },
       { href: "/generate/hashtags", label: "Hashtags", reason: "Trending + niche stack" },
