@@ -102,8 +102,12 @@ export function getActiveBrainId(): string | null {
 export function setActiveBrainId(id: string | null): void {
   const s = safeLocal();
   if (!s) return;
+  const prev = s.getItem(KEYS.activeBrain);
   if (id) s.setItem(KEYS.activeBrain, id);
   else s.removeItem(KEYS.activeBrain);
+  if (prev !== id && typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("ados:active-brain-changed", { detail: { id } }));
+  }
 }
 
 // --- Usage ---

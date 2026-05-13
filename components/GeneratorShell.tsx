@@ -38,17 +38,31 @@ function Inner<I extends Record<string, unknown>>({ config, scope }: Props<I>) {
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    const loadBrain = async () => {
+    const loadBrain = async (opts: { resetForm?: boolean } = {}) => {
       const id = getActiveBrainId();
       const b = id ? (await getBrain(id)) ?? null : null;
       setBrain(b);
-      // Smart-fill: pre-populate any empty input fields from the active brand brain
-      setInput((cur) => applySmartFill(config.fields, cur, b));
+      // Smart-fill behavior:
+      //   - On initial load + on brain attribute edits: top-up empty fields only.
+      //   - On active-client SWITCH: reset form to defaults, then auto-fill from
+      //     the new brain. This is what "select a client → all tools populate"
+      //     means — switching clients shouldn't leave the previous client's
+      //     industry / audience / etc. in the form.
+      if (opts.resetForm) {
+        setInput(applySmartFill(config.fields, config.initial, b));
+      } else {
+        setInput((cur) => applySmartFill(config.fields, cur, b));
+      }
     };
     loadBrain();
-    const h = () => loadBrain();
-    window.addEventListener("ados:brains-changed", h);
-    return () => window.removeEventListener("ados:brains-changed", h);
+    const handleBrainsChanged = () => loadBrain();
+    const handleClientSwitched = () => loadBrain({ resetForm: true });
+    window.addEventListener("ados:brains-changed", handleBrainsChanged);
+    window.addEventListener("ados:active-brain-changed", handleClientSwitched);
+    return () => {
+      window.removeEventListener("ados:brains-changed", handleBrainsChanged);
+      window.removeEventListener("ados:active-brain-changed", handleClientSwitched);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
