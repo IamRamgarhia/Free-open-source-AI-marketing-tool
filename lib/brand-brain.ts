@@ -102,6 +102,8 @@ export function normalizeBrandBrain(b: any): BrandBrain {
 
 const list = (arr: string[]) => (arr.length ? arr.join(" | ") : "(none specified)");
 
+import { FRAMEWORK_STACK } from "./prompts/framework-stack";
+
 export interface SystemPromptOverrides {
   language?: string;
   tone_override?: string;
@@ -114,6 +116,8 @@ export function buildBrandSystemPrompt(brain: BrandBrain | null, overrides?: Sys
     return `You are an expert direct-response copywriter and paid media specialist.
 The user has not configured a Brand Brain yet. Write professional, conversion-focused copy
 that respects all platform character limits given in the user prompt.
+
+${FRAMEWORK_STACK}
 
 HONESTY: Never fabricate stats, testimonials, named partnerships, awards, or certifications.
 AVOID: streamline, optimize, innovative, utilize, leverage, synergy, transform, "best", "#1", "leading" — unless verifiable.
@@ -170,6 +174,8 @@ PROVEN ANGLES: ${list(brain.best_performing_angles)}
 ANGLES TO AVOID: ${list(brain.failed_angles)}
 
 === END BRAND BRAIN ===
+
+${FRAMEWORK_STACK}
 
 RULES:
 1. Always write in the exact tone and style above.

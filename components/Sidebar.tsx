@@ -50,10 +50,13 @@ export function Sidebar() {
               <div className="mt-1 space-y-0.5">
                 {g.items.map((item) => {
                   const active = path === item.href || (item.href !== "/" && path?.startsWith(item.href));
+                  const href = item.query ? `${item.href}?${item.query}` : item.href;
+                  // Tools repeated across platform groups need a stable React key.
+                  const linkKey = `${g.title}::${item.href}::${item.query ?? ""}`;
                   return (
                     <Link
-                      key={item.href}
-                      href={item.href}
+                      key={linkKey}
+                      href={href}
                       className={cn(
                         "group flex items-center gap-2 px-3 py-2 text-sm transition border-l-2",
                         active

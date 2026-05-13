@@ -1,6 +1,7 @@
 "use client";
 
-import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, Suspense, memo, useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Loader2, Sparkles, Save, AlertTriangle, StopCircle } from "lucide-react";
 import { ApiKeyGate } from "@/components/ApiKeyGate";
 import { PageHeader } from "@/components/PageHeader";
@@ -11,6 +12,8 @@ import { streamClaude, estimateCostUsd, tryParseJson } from "@/lib/claude";
 import { getBrain, saveAd, type GeneratedAd } from "@/lib/storage";
 import { buildBrandSystemPrompt, type BrandBrain } from "@/lib/brand-brain";
 import { applySmartFill } from "@/lib/smart-fill";
+import { rememberLastGenerated, suggestNextSteps, type NextStep } from "@/lib/next-steps";
+import Link from "next/link";
 import type { GeneratorConfig, InputField } from "@/lib/generator-config";
 
 interface Props<I extends Record<string, unknown>> {
@@ -21,12 +24,15 @@ interface Props<I extends Record<string, unknown>> {
 export function GeneratorShell<I extends Record<string, unknown>>({ config, scope }: Props<I>) {
   return (
     <ApiKeyGate>
-      <Inner config={config} scope={scope} />
+      <Suspense fallback={null}>
+        <Inner config={config} scope={scope} />
+      </Suspense>
     </ApiKeyGate>
   );
 }
 
 function Inner<I extends Record<string, unknown>>({ config, scope }: Props<I>) {
+  const searchParams = useSearchParams();
   const [input, setInput] = useState<I>(config.initial);
   const [brain, setBrain] = useState<BrandBrain | null>(null);
   const [running, setRunning] = useState(false);
@@ -34,6 +40,7 @@ function Inner<I extends Record<string, unknown>>({ config, scope }: Props<I>) {
   const [error, setError] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
   const [hasRun, setHasRun] = useState(false);
+  const [nextSteps, setNextSteps] = useState<NextStep[]>([]);
   const stream = useThrottledStream();
   const abortRef = useRef<AbortController | null>(null);
 
@@ -49,9 +56,9 @@ function Inner<I extends Record<string, unknown>>({ config, scope }: Props<I>) {
       //     means — switching clients shouldn't leave the previous client's
       //     industry / audience / etc. in the form.
       if (opts.resetForm) {
-        setInput(applySmartFill(config.fields, config.initial, b));
+        setInput(applyQueryOverrides(applySmartFill(config.fields, config.initial, b), searchParams));
       } else {
-        setInput((cur) => applySmartFill(config.fields, cur, b));
+        setInput((cur) => applyQueryOverrides(applySmartFill(config.fields, cur, b), searchParams));
       }
     };
     loadBrain();
@@ -156,6 +163,15 @@ function Inner<I extends Record<string, unknown>>({ config, scope }: Props<I>) {
         };
         await saveAd(ad);
         setSavedId(ad.id);
+        rememberLastGenerated({
+          id: ad.id,
+          title: ad.title,
+          platform: ad.platform,
+          campaign_type: ad.campaign_type,
+          brand_id: ad.brand_id,
+          saved_at: ad.created_at,
+        });
+        setNextSteps(suggestNextSteps({ platform: ad.platform, campaign_type: ad.campaign_type, ad_id: ad.id }));
       }
     } catch (e: any) {
       if (e?.name === "AbortError") setError("Generation stopped.");
@@ -260,8 +276,60 @@ function Inner<I extends Record<string, unknown>>({ config, scope }: Props<I>) {
 
         <section className="lg:col-span-3 space-y-4">
           <OutputArea running={running} stream={stream.text} parsed={parsed} config={config as unknown as GeneratorConfig<Record<string, unknown>>} hasRun={hasRun} />
+          {savedId && nextSteps.length ? <NextStepsPanel steps={nextSteps} /> : null}
         </section>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Apply URL query params on top of a smart-filled input. Only fields whose
+ * names actually appear in the generator's config get overridden, so URLs like
+ * `/optimize/ctr?platform=Meta+Feed&ad_id=...` are safe to pass through unknown
+ * params (ad_id, brand_id) without polluting form state.
+ *
+ * Skipped if `?carry=0` is passed (used to force-reset the form).
+ */
+function applyQueryOverrides<I extends Record<string, unknown>>(
+  current: I,
+  searchParams: URLSearchParams | null
+): I {
+  if (!searchParams) return current;
+  if (searchParams.get("carry") === "0") return current;
+  const next: any = { ...current };
+  for (const [key, val] of searchParams.entries()) {
+    if (key === "ad_id" || key === "brand_id" || key === "carry") continue;
+    if (val) next[key] = val;
+  }
+  return next as I;
+}
+
+function NextStepsPanel({ steps }: { steps: NextStep[] }) {
+  return (
+    <div className="border border-live/30 bg-live/[0.03] p-4 rounded-md">
+      <div className="text-[10px] font-mono uppercase tracking-ui-mega text-live mb-3 pb-2 border-b border-base-700">
+        What's next · this asset is saved, here are the natural follow-ups
+      </div>
+      <ul className="space-y-1.5">
+        {steps.map((s) => {
+          const qs = s.carry ? "?" + new URLSearchParams(s.carry).toString() : "";
+          return (
+            <li key={s.href + (s.carry?.platform ?? "")}>
+              <Link
+                href={s.href + qs}
+                className="flex items-start gap-3 px-2 py-1.5 hover:bg-base-800/40 transition rounded-sm"
+              >
+                <span className="text-live text-xs mt-0.5">→</span>
+                <div className="flex-1">
+                  <div className="text-sm text-ink">{s.label}</div>
+                  <div className="text-[11px] text-ink-muted">{s.reason}</div>
+                </div>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
