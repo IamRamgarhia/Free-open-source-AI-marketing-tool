@@ -14,6 +14,7 @@ import { ingestUrl, ingestPasted } from "@/lib/url-ingest";
 import { INDUSTRY_TEMPLATES } from "@/lib/industry-templates";
 import { llmCall, estimateCostUsd, tryParseJson } from "@/lib/llm";
 import { buildBrandExtractionPrompt } from "@/lib/prompts/brand-extraction";
+import { deterministicFillFromMetadata } from "@/lib/deterministic-brand-fill";
 
 export default function BrandOnboardingPage() {
   return (
@@ -44,26 +45,40 @@ function Inner() {
     sourceUrl: string,
     source: "url" | "paste" | "google",
     sourceLabel: string,
-    metadataExtras?: { social_links?: Record<string, string>; favicon?: string }
+    deterministic?: Partial<BrandBrain>
   ) {
-    // Merge metadata-derived social_links over AI-parsed ones. The metadata
-    // values came from regex-matching anchor hrefs in the actual HTML — they're
-    // deterministic and authoritative. AI-parsed values are a guess; the
-    // metadata version wins on collision.
+    // Merge order matters. Metadata-derived fields (the `deterministic` partial)
+    // come from regex on the actual HTML — they're authoritative. The AI's
+    // parsed JSON is inference. So: empty → AI parsed → deterministic wins.
+    // Social links merge by key (deterministic wins per platform).
     const aiSocials = (parsed?.social_links && typeof parsed.social_links === "object") ? parsed.social_links : {};
-    const metaSocials = metadataExtras?.social_links ?? {};
-    const mergedSocials = { ...aiSocials, ...metaSocials };
+    const detSocials = deterministic?.social_links ?? {};
+    const mergedSocials = { ...aiSocials, ...detSocials };
 
-    const brain: BrandBrain = {
-      ...emptyBrandBrain(),
-      ...(parsed ?? {}),
-      social_links: mergedSocials,
-      name: parsed?.business_name || fallbackName,
-      business_name: parsed?.business_name || fallbackName,
-      website_url: sourceUrl,
-      favicon_url: metadataExtras?.favicon || "",
-    };
-    setPendingExtraction({ brain, source, sourceLabel });
+    // For string fields, keep the AI's version only if deterministic is empty.
+    // For arrays (platforms, products, etc.), prefer deterministic only if it
+    // produced something; otherwise keep AI's.
+    const merged: any = { ...emptyBrandBrain(), ...(parsed ?? {}) };
+    for (const [k, v] of Object.entries(deterministic ?? {})) {
+      if (v === undefined || v === null) continue;
+      if (Array.isArray(v)) {
+        if (v.length) merged[k] = v;
+      } else if (typeof v === "string") {
+        if (v.trim()) merged[k] = v;
+      } else if (typeof v === "object") {
+        // social_links handled separately above; skip here.
+        continue;
+      } else {
+        merged[k] = v;
+      }
+    }
+    merged.social_links = mergedSocials;
+    merged.name = merged.business_name || parsed?.business_name || fallbackName;
+    merged.business_name = merged.business_name || parsed?.business_name || fallbackName;
+    merged.website_url = sourceUrl;
+    merged.favicon_url = deterministic?.favicon_url || "";
+
+    setPendingExtraction({ brain: merged as BrandBrain, source, sourceLabel });
     setQuickStatus(null);
   }
 
@@ -91,7 +106,7 @@ function Inner() {
   async function quickAddFromUrl() {
     if (!quickUrl.trim()) return;
     setQuickBusy(true);
-    setQuickStatus("Reading the page…");
+    setQuickStatus("① Fetching page content…");
     setShowPaste(false);
     try {
       const r = await ingestUrl(quickUrl);
@@ -100,22 +115,30 @@ function Inner() {
         if (r.recoverable) setShowPaste(true);
         return;
       }
-      setQuickStatus(r.source === "allorigins" ? "Got content via fallback reader. Extracting brand intelligence…" : "Extracting brand intelligence…");
+      setQuickStatus("② Reading page metadata (title, OG tags, social links, schema)…");
+      const deterministic = deterministicFillFromMetadata(r.metadata, r.url);
+      console.log("[adforge:brand-extract] deterministic fill:", deterministic);
+      console.log("[adforge:brand-extract] raw metadata:", r.metadata);
+      const sourceLabel = `${r.url} (via ${
+        r.source === "sidecar" ? "local sidecar" :
+        r.source === "allorigins" ? "AllOrigins fallback" :
+        "Jina Reader"
+      })`;
+      setQuickStatus("③ Asking AI to fill the inference-heavy fields (tone, audience, pain points, products)…");
       const res = await llmCall({
         messages: [{ role: "user", content: buildBrandExtractionPrompt({ website_content: r.content, description: `Brand at ${r.url}`, audience_notes: "", reviews: "", metadata: r.metadata }) }],
         maxTokens: 3000,
         temperature: 0.4,
       });
+      console.log("[adforge:brand-extract] raw AI response text:", res.text);
       const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
       addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
       window.dispatchEvent(new Event("ados:usage"));
       const parsed = tryParseJson<any>(res.text);
+      console.log("[adforge:brand-extract] parsed AI JSON:", parsed);
+      setQuickStatus("④ Merging metadata + AI results…");
       const fallback = new URL(r.url).hostname.replace(/^www\./, "");
-      stageBrain(parsed, fallback, r.url, "url", `${r.url} (via ${
-        r.source === "sidecar" ? "local sidecar" :
-        r.source === "allorigins" ? "AllOrigins fallback" :
-        "Jina Reader"
-      })`, { social_links: r.metadata?.social_links, favicon: r.metadata?.favicon });
+      stageBrain(parsed, fallback, r.url, "url", sourceLabel, deterministic);
     } catch (e: any) {
       setQuickStatus(e?.message ?? "Failed");
     } finally {
@@ -126,7 +149,7 @@ function Inner() {
   async function quickAddFromPaste() {
     if (!pasted.trim()) return;
     setQuickBusy(true);
-    setQuickStatus("Extracting brand intelligence from pasted content…");
+    setQuickStatus("① Asking AI to extract brand intelligence from pasted content…");
     try {
       const r = ingestPasted(quickUrl, pasted);
       if (!r.ok) {
@@ -138,10 +161,12 @@ function Inner() {
         maxTokens: 3000,
         temperature: 0.4,
       });
+      console.log("[adforge:brand-extract] raw AI response text (paste):", res.text);
       const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
       addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
       window.dispatchEvent(new Event("ados:usage"));
       const parsed = tryParseJson<any>(res.text);
+      console.log("[adforge:brand-extract] parsed AI JSON (paste):", parsed);
       const fallbackName = quickUrl ? (() => { try { return new URL(/^https?:\/\//i.test(quickUrl) ? quickUrl : `https://${quickUrl}`).hostname.replace(/^www\./, ""); } catch { return "My Brand"; } })() : "My Brand";
       stageBrain(parsed, fallbackName, quickUrl, "paste", `Pasted content${quickUrl ? ` from ${quickUrl}` : ""}`);
     } catch (e: any) {
@@ -154,7 +179,7 @@ function Inner() {
   async function quickAddFromGoogle() {
     if (!googleQuery.trim()) return;
     setQuickBusy(true);
-    setQuickStatus(`Searching Google for "${googleQuery}"…`);
+    setQuickStatus(`① Searching Google for "${googleQuery}"…`);
     try {
       const searchUrl = `https://s.jina.ai/${encodeURIComponent(googleQuery.trim())}`;
       const r = await ingestUrl(searchUrl);
@@ -162,16 +187,18 @@ function Inner() {
         setQuickStatus(r.message);
         return;
       }
-      setQuickStatus("Extracting brand intelligence from search results…");
+      setQuickStatus("② Asking AI to extract brand intelligence from search results…");
       const res = await llmCall({
         messages: [{ role: "user", content: buildBrandExtractionPrompt({ website_content: r.content, description: `Brand found via Google search: ${googleQuery}`, audience_notes: "", reviews: "" }) }],
         maxTokens: 3000,
         temperature: 0.4,
       });
+      console.log("[adforge:brand-extract] raw AI response text (google):", res.text);
       const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
       addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
       window.dispatchEvent(new Event("ados:usage"));
       const parsed = tryParseJson<any>(res.text);
+      console.log("[adforge:brand-extract] parsed AI JSON (google):", parsed);
       stageBrain(parsed, googleQuery, "", "google", `Google search · "${googleQuery}"`);
     } catch (e: any) {
       setQuickStatus(e?.message ?? "Google search ingest failed");
@@ -250,7 +277,12 @@ function Inner() {
               </button>
             </div>
             {quickStatus ? (
-              <pre className="text-[11px] font-mono uppercase tracking-ui-wide text-neg mt-2 whitespace-pre-wrap leading-relaxed">{quickStatus}</pre>
+              <div className={`mt-2 border px-3 py-2 ${quickBusy ? "border-info/40 bg-info/[0.06]" : "border-neg/40 bg-neg/[0.05]"}`}>
+                <div className="flex items-start gap-2">
+                  {quickBusy ? <Loader2 size={11} className="animate-spin text-info shrink-0 mt-0.5" /> : <AlertTriangle size={11} className="text-neg shrink-0 mt-0.5" />}
+                  <pre className={`text-[11px] font-mono uppercase tracking-ui-wide whitespace-pre-wrap leading-relaxed ${quickBusy ? "text-info" : "text-neg"}`}>{quickStatus}</pre>
+                </div>
+              </div>
             ) : (
               <p className="text-[11px] font-mono uppercase tracking-ui-wide text-ink-subtle mt-2">
                 tries jina reader → allorigins fallback · facebook/instagram block scrapers (use method 2 or 3 instead)
