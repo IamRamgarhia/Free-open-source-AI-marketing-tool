@@ -17,6 +17,9 @@ export interface BrandBrain {
   industry: string;
   niche: string;
   website_url?: string;
+  /** Public URL of the favicon scraped during onboarding. Rendered next to the
+   *  client's name on cards and in the sidebar's quick-switcher. */
+  favicon_url?: string;
   products: string[];
   platforms: string[];
   content_pillars: string[];
@@ -60,6 +63,7 @@ export function emptyBrandBrain(): BrandBrain {
     industry: "",
     niche: "",
     website_url: "",
+    favicon_url: "",
     products: [],
     platforms: [],
     content_pillars: [],

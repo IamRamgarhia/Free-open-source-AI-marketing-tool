@@ -167,6 +167,15 @@ function BrandInner() {
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activateBrand(b.id); } }}
                   aria-pressed={isActive}
                 >
+                  {b.favicon_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={b.favicon_url}
+                      alt=""
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                      className="h-9 w-9 rounded-sm border border-base-700 bg-base-900 object-contain shrink-0"
+                    />
+                  ) : null}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
                       {isActive ? (

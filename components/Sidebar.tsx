@@ -146,9 +146,19 @@ export function Sidebar() {
               aria-expanded={switcherOpen}
               aria-haspopup="listbox"
             >
-              <div className="shrink-0 h-7 w-7 grid place-items-center bg-live/20 border border-live/40 rounded-sm">
-                <Brain size={12} className="text-live" />
-              </div>
+              {activeBrand.favicon_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={activeBrand.favicon_url}
+                  alt=""
+                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                  className="shrink-0 h-7 w-7 rounded-sm border border-live/40 bg-base-900 object-contain"
+                />
+              ) : (
+                <div className="shrink-0 h-7 w-7 grid place-items-center bg-live/20 border border-live/40 rounded-sm">
+                  <Brain size={12} className="text-live" />
+                </div>
+              )}
               <div className="flex-1 min-w-0">
                 <div className="text-[9px] font-mono uppercase tracking-ui-mega text-ink-faint leading-none">active client</div>
                 <div className="text-[13px] text-ink font-medium truncate leading-tight mt-0.5">

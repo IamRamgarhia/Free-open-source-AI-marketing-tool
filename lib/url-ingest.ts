@@ -10,12 +10,22 @@
  *
  * Runs 100% in the user's browser. No backend.
  */
+export interface IngestMetadata {
+  title?: string;
+  description?: string;
+  og?: Record<string, string>;
+  favicon?: string;
+  social_links?: Record<string, string>;
+  json_ld?: unknown[];
+}
+
 export interface IngestResult {
   ok: true;
   url: string;
   content: string;
   truncated: boolean;
   source: "jina" | "allorigins" | "sidecar";
+  metadata?: IngestMetadata;
 }
 export interface IngestError {
   ok: false;
@@ -92,6 +102,7 @@ async function trySidecar(target: string, signal?: AbortSignal): Promise<IngestO
       content: j.content,
       truncated: !!j.truncated,
       source: "sidecar",
+      metadata: j.metadata,
     };
   } catch (e: any) {
     if (e?.name === "AbortError") return { ok: false, recoverable: false, message: "Cancelled." };

@@ -207,6 +207,89 @@ function startWeb() {
 }
 
 /**
+ * Pull structured metadata from a raw HTML body. Every modern site puts brand
+ * signal in <head> (title, OG, JSON-LD) + footer anchors (social links). The
+ * brand-extraction AI needs these as STRUCTURED inputs, not buried in stripped
+ * body prose. Returns { title, description, og, favicon, social_links, json_ld }.
+ */
+function extractMetadata(html, baseUrl) {
+  const meta = {
+    title: "",
+    description: "",
+    og: {},
+    favicon: "",
+    social_links: {},
+    json_ld: [],
+  };
+
+  const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+  if (titleMatch) meta.title = titleMatch[1].trim();
+
+  // meta name=/property= with content=, both attribute orders
+  const metaTagRe = /<meta\b[^>]*>/gi;
+  let m;
+  while ((m = metaTagRe.exec(html)) !== null) {
+    const tag = m[0];
+    const nameMatch = tag.match(/(?:name|property)\s*=\s*["']([^"']+)["']/i);
+    const contentMatch = tag.match(/content\s*=\s*["']([^"']*)["']/i);
+    if (!nameMatch || !contentMatch) continue;
+    const key = nameMatch[1].toLowerCase();
+    const val = contentMatch[1];
+    if (key === "description" && !meta.description) meta.description = val;
+    if (key.startsWith("og:")) meta.og[key.slice(3)] = val;
+    if (key === "twitter:title" && !meta.og.title) meta.og.title = val;
+    if (key === "twitter:description" && !meta.og.description) meta.og.description = val;
+    if (key === "twitter:image" && !meta.og.image) meta.og.image = val;
+  }
+
+  // favicon — prefer non-apple icon when multiple variants present
+  const linkRe = /<link\b[^>]*>/gi;
+  while ((m = linkRe.exec(html)) !== null) {
+    const tag = m[0];
+    const relMatch = tag.match(/rel\s*=\s*["']([^"']+)["']/i);
+    const hrefMatch = tag.match(/href\s*=\s*["']([^"']+)["']/i);
+    if (!relMatch || !hrefMatch) continue;
+    if (/icon/i.test(relMatch[1])) {
+      try {
+        meta.favicon = new URL(hrefMatch[1], baseUrl).toString();
+        if (!/apple-touch/i.test(relMatch[1])) break;
+      } catch { /* skip */ }
+    }
+  }
+  if (!meta.favicon) {
+    try { meta.favicon = new URL("/favicon.ico", baseUrl).toString(); } catch {}
+  }
+
+  // Social media anchor hrefs — bucket by hostname
+  const anchorRe = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>/gi;
+  while ((m = anchorRe.exec(html)) !== null) {
+    let u;
+    try { u = new URL(m[1], baseUrl); } catch { continue; }
+    const host = u.hostname.replace(/^www\./i, "").toLowerCase();
+    const url = u.toString();
+    if (!meta.social_links.facebook && /(^|\.)facebook\.com$/.test(host) && !/\/sharer/i.test(u.pathname)) meta.social_links.facebook = url;
+    if (!meta.social_links.instagram && /(^|\.)instagram\.com$/.test(host)) meta.social_links.instagram = url;
+    if (!meta.social_links.twitter && (/(^|\.)twitter\.com$/.test(host) || /(^|\.)x\.com$/.test(host)) && !/\/intent\//i.test(u.pathname)) meta.social_links.twitter = url;
+    if (!meta.social_links.linkedin && /(^|\.)linkedin\.com$/.test(host)) meta.social_links.linkedin = url;
+    if (!meta.social_links.youtube && /(^|\.)youtube\.com$/.test(host)) meta.social_links.youtube = url;
+    if (!meta.social_links.tiktok && /(^|\.)tiktok\.com$/.test(host)) meta.social_links.tiktok = url;
+    if (!meta.social_links.pinterest && /(^|\.)pinterest\.com$/.test(host)) meta.social_links.pinterest = url;
+    if (!meta.social_links.threads && /(^|\.)threads\.net$/.test(host)) meta.social_links.threads = url;
+  }
+
+  // JSON-LD organization / business schema
+  const jsonLdRe = /<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  while ((m = jsonLdRe.exec(html)) !== null) {
+    try {
+      const parsed = JSON.parse(m[1].trim());
+      meta.json_ld.push(parsed);
+    } catch { /* skip malformed JSON-LD */ }
+  }
+
+  return meta;
+}
+
+/**
  * "Clean rebuild" — kills any running web child, deletes the .next/ build cache,
  * and lets the caller restart fresh. Common fix when CSS chunk references go
  * stale (which happens if `next build` ever runs over a `next dev` working
@@ -624,8 +707,14 @@ const server = http.createServer(async (req, res) => {
       } catch (e) {
         return json(res, 502, { ok: false, error: e?.message || "Fetch failed" });
       }
-      // Strip HTML to plain text — naive but good enough for AI ingestion.
-      // The browser side does a fancier DOMParser-based version when needed.
+
+      // Extract structured metadata BEFORE stripping HTML. Everything in <head>
+      // (title, description, OG tags, favicon, JSON-LD organization data) and
+      // every social-media anchor href is high-signal for brand-brain
+      // extraction. Stripping them away first was throwing out the best data.
+      const metadata = extractMetadata(body, target);
+
+      // Now strip HTML to plain text for the body content.
       const text = body
         .replace(/<script[\s\S]*?<\/script>/gi, "")
         .replace(/<style[\s\S]*?<\/style>/gi, "")
@@ -648,6 +737,7 @@ const server = http.createServer(async (req, res) => {
         content: trimmed,
         truncated: text.length > MAX,
         source: "sidecar",
+        metadata,
       });
     }
 

@@ -3,12 +3,36 @@ export interface BrandExtractionInput {
   description: string;
   audience_notes?: string;
   reviews?: string;
+  // Structured metadata pulled from the HTML head + footer anchors. When the
+  // sidecar /ingest endpoint provides this, it's high-signal explicit data
+  // (not inference) and the AI should treat it as authoritative.
+  metadata?: {
+    title?: string;
+    description?: string;
+    og?: Record<string, string>;
+    favicon?: string;
+    social_links?: Record<string, string>;
+    json_ld?: unknown[];
+  };
 }
 
 export function buildBrandExtractionPrompt(input: BrandExtractionInput): string {
+  // Render the structured metadata block when present. This is the explicit
+  // data the AI should NEVER ignore — page <title>, meta description, OG tags,
+  // JSON-LD organization schema, and every social-media URL we found in the
+  // page's anchors.
+  const meta = input.metadata;
+  const metadataBlock = meta && (meta.title || meta.description || (meta.og && Object.keys(meta.og).length) || (meta.social_links && Object.keys(meta.social_links).length) || (meta.json_ld?.length))
+    ? `INPUT — STRUCTURED METADATA (extracted directly from the page <head> + footer anchors — TRUST THESE, they're not inference):
+${meta.title ? `- Page <title>: ${meta.title}\n` : ""}${meta.description ? `- Meta description: ${meta.description}\n` : ""}${meta.og?.title ? `- OG title: ${meta.og.title}\n` : ""}${meta.og?.description ? `- OG description: ${meta.og.description}\n` : ""}${meta.og?.site_name ? `- OG site_name: ${meta.og.site_name}\n` : ""}${meta.favicon ? `- Favicon: ${meta.favicon}\n` : ""}${meta.social_links && Object.keys(meta.social_links).length ? `- Social links found in page:\n${Object.entries(meta.social_links).map(([k, v]) => `    ${k}: ${v}`).join("\n")}\n` : ""}${meta.json_ld?.length ? `- JSON-LD schema blocks: ${JSON.stringify(meta.json_ld).slice(0, 2000)}\n` : ""}
+RULE: Whatever appears above MUST populate the matching output fields verbatim. Don't second-guess the page's own metadata — use the title for business_name when explicit, the description for niche/USP, OG tags for additional positioning, social_links for the social_links output field directly. The body content below is for everything else (audience, tone, products, content pillars, pain points).
+
+`
+    : "";
+
   return `You are a senior brand strategist + direct-response copywriter with 20 years experience. Your job is to extract a COMPLETE brand intelligence profile from the content below. The user pasted this content trusting you to populate everything you can reasonably deduce — empty fields are a worse outcome than thoughtful inferences.
 
-INPUT — WEBSITE / LANDING CONTENT (this is the primary source — read every word):
+${metadataBlock}INPUT — WEBSITE / LANDING CONTENT (body text, after HTML strip):
 """
 ${input.website_content?.trim() || "(not provided)"}
 """

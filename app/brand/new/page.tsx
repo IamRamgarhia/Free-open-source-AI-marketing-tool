@@ -38,13 +38,30 @@ function Inner() {
     sourceLabel: string;
   } | null>(null);
 
-  function stageBrain(parsed: any, fallbackName: string, sourceUrl: string, source: "url" | "paste" | "google", sourceLabel: string) {
+  function stageBrain(
+    parsed: any,
+    fallbackName: string,
+    sourceUrl: string,
+    source: "url" | "paste" | "google",
+    sourceLabel: string,
+    metadataExtras?: { social_links?: Record<string, string>; favicon?: string }
+  ) {
+    // Merge metadata-derived social_links over AI-parsed ones. The metadata
+    // values came from regex-matching anchor hrefs in the actual HTML — they're
+    // deterministic and authoritative. AI-parsed values are a guess; the
+    // metadata version wins on collision.
+    const aiSocials = (parsed?.social_links && typeof parsed.social_links === "object") ? parsed.social_links : {};
+    const metaSocials = metadataExtras?.social_links ?? {};
+    const mergedSocials = { ...aiSocials, ...metaSocials };
+
     const brain: BrandBrain = {
       ...emptyBrandBrain(),
       ...(parsed ?? {}),
+      social_links: mergedSocials,
       name: parsed?.business_name || fallbackName,
       business_name: parsed?.business_name || fallbackName,
       website_url: sourceUrl,
+      favicon_url: metadataExtras?.favicon || "",
     };
     setPendingExtraction({ brain, source, sourceLabel });
     setQuickStatus(null);
@@ -85,7 +102,7 @@ function Inner() {
       }
       setQuickStatus(r.source === "allorigins" ? "Got content via fallback reader. Extracting brand intelligence…" : "Extracting brand intelligence…");
       const res = await llmCall({
-        messages: [{ role: "user", content: buildBrandExtractionPrompt({ website_content: r.content, description: `Brand at ${r.url}`, audience_notes: "", reviews: "" }) }],
+        messages: [{ role: "user", content: buildBrandExtractionPrompt({ website_content: r.content, description: `Brand at ${r.url}`, audience_notes: "", reviews: "", metadata: r.metadata }) }],
         maxTokens: 3000,
         temperature: 0.4,
       });
@@ -98,7 +115,7 @@ function Inner() {
         r.source === "sidecar" ? "local sidecar" :
         r.source === "allorigins" ? "AllOrigins fallback" :
         "Jina Reader"
-      })`);
+      })`, { social_links: r.metadata?.social_links, favicon: r.metadata?.favicon });
     } catch (e: any) {
       setQuickStatus(e?.message ?? "Failed");
     } finally {
