@@ -338,11 +338,24 @@ export function BrandBrainForm({ initial }: Props) {
         </div>
       ) : null}
 
-      <section className="card">
-        <h2 className="text-[10px] font-mono uppercase tracking-ui-mega text-ink-muted mb-1">AI extract from a description</h2>
-        <p className="text-xs text-ink-muted mb-4">
-          Paste anything you have — landing page copy, a paragraph about your business, recent reviews.
-          Claude will fill the form below. You can still edit everything by hand.
+      {/* Staging form for raw content → AI extraction. Hidden once the brand
+       *  has a business_name (i.e. when EDITING an existing brain), because then
+       *  the user already has the data filled below — these inputs would just
+       *  look confusingly empty. On an existing brain, the "Fill empty with AI"
+       *  button on the Website URL row is the right re-extraction entry point. */}
+      <details className="card" open={!brain.business_name?.trim()}>
+        <summary className="cursor-pointer list-none flex items-center gap-2">
+          <h2 className="text-[10px] font-mono uppercase tracking-ui-mega text-ink-muted mb-0">
+            {brain.business_name?.trim() ? "AI extract from new content (advanced)" : "AI extract from a description"}
+          </h2>
+          <span className="text-[10px] font-mono uppercase tracking-ui-wide text-ink-faint ml-auto">
+            {brain.business_name?.trim() ? "click to expand" : ""}
+          </span>
+        </summary>
+        <p className="text-xs text-ink-muted mb-4 mt-2">
+          {brain.business_name?.trim()
+            ? "You already have a populated brain below. Use this only when you want to RE-extract from new pasted content (e.g. you just got customer reviews and want them merged in). For a quick re-run from the saved URL, use the 'Fill empty with AI' button on the Website URL row instead."
+            : "Paste anything you have — landing page copy, a paragraph about your business, recent reviews. Claude will fill the form below. You can still edit everything by hand."}
         </p>
         <div className="grid gap-3 md:grid-cols-2">
           <div>
@@ -392,7 +405,7 @@ export function BrandBrainForm({ initial }: Props) {
           {extracting ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
           {extracting ? "Extracting…" : "Extract Brand Brain"}
         </button>
-      </section>
+      </details>
 
       <section className="card space-y-4">
         <h2 className="text-[10px] font-mono uppercase tracking-ui-mega text-ink-muted">Brand Brain fields</h2>
