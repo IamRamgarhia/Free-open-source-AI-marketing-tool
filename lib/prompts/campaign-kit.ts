@@ -7,8 +7,14 @@ export interface CampaignKitInput {
   budget_monthly: string;
 }
 
+import { BANNED_WORDS_RULE, HONESTY_CLAUSE } from "./common-rules";
+
 export function buildCampaignKitPrompt(input: CampaignKitInput): string {
   return `Generate a complete multi-platform campaign kit for: ${input.campaign_name}
+
+${BANNED_WORDS_RULE}
+
+${HONESTY_CLAUSE}
 
 ALL OUTPUT MUST BE MESSAGE-MATCHED to ONE central USP/promise. Variants per platform — but all anchored to the same hook.
 

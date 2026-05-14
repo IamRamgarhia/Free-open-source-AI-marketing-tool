@@ -4,7 +4,7 @@ import { GeneratorShell } from "@/components/GeneratorShell";
 import { Section } from "@/components/OutputBlocks";
 import { CharBadge } from "@/components/CharBadge";
 import { CopyButton } from "@/components/CopyButton";
-import { buildDisplayPrompt, type DisplayInput } from "@/lib/prompts/display-ads";
+import { buildDisplayPrompt, DISPLAY_SIZES, type DisplayInput } from "@/lib/prompts/display-ads";
 import type { GeneratorConfig } from "@/lib/generator-config";
 
 const config: GeneratorConfig<DisplayInput & Record<string, unknown>> = {
@@ -35,18 +35,25 @@ function DisplayOutput({ json }: { json: any }) {
     <div className="space-y-4 stagger">
       <Section title={`Sized creatives · ${json?.creatives?.length ?? 0}`}>
         <div className="grid md:grid-cols-2 gap-2">
-          {(json?.creatives ?? []).map((c: any, i: number) => (
+          {(json?.creatives ?? []).map((c: any, i: number) => {
+            // Look up per-size limits — banner sizes have different char caps
+            // (Mobile Banner is 22/28, Half Page is 30/90, etc.). Falling back
+            // to 30/90 when no match is the loosest defensible default.
+            const sz = DISPLAY_SIZES.find((s) => s.name === c.name || s.ratio === c.size);
+            const hMax = sz?.h_max ?? 30;
+            const dMax = sz?.d_max ?? 90;
+            return (
             <div key={i} className="border border-base-700 bg-base-900/30 p-3 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="font-mono text-[10px] uppercase tracking-ui-mega text-live">{c.size}</span>
                 <span className="text-[10px] text-ink-faint">{c.name}</span>
               </div>
               <div className="flex items-center gap-2">
-                <CharBadge count={c.char_counts?.headline ?? c.short_headline?.length ?? 0} max={30} />
+                <CharBadge count={c.char_counts?.headline ?? c.short_headline?.length ?? 0} max={hMax} />
                 <span className="text-sm text-ink font-medium">{c.short_headline}</span>
               </div>
               <div className="flex items-start gap-2 text-xs">
-                <CharBadge count={c.char_counts?.description ?? c.description?.length ?? 0} max={90} />
+                <CharBadge count={c.char_counts?.description ?? c.description?.length ?? 0} max={dMax} />
                 <span className="text-ink-muted">{c.description}</span>
               </div>
               <div className="flex items-center justify-between">
@@ -55,7 +62,8 @@ function DisplayOutput({ json }: { json: any }) {
               </div>
               <p className="text-[11px] text-info border-t border-base-700 pt-2 mt-1">visual: {c.image_concept}</p>
             </div>
-          ))}
+            );
+          })}
         </div>
       </Section>
 

@@ -2,6 +2,7 @@
 
 import { GeneratorShell } from "@/components/GeneratorShell";
 import { Section, Pill, Kv } from "@/components/OutputBlocks";
+import { getCurrency } from "@/lib/currency";
 import { buildBudgetWastePrompt, type BudgetWasteInput } from "@/lib/prompts/budget-waste";
 import type { GeneratorConfig } from "@/lib/generator-config";
 
@@ -61,6 +62,7 @@ const priorityTone: Record<string, "neg" | "live" | "default" | "pos"> = {
 };
 
 function BudgetOutput({ json }: { json: any }) {
+  const sym = getCurrency().symbol;
   if (json?.stop_condition) {
     return (
       <Section title="STOP">
@@ -74,7 +76,7 @@ function BudgetOutput({ json }: { json: any }) {
       {json?.pulse ? (
         <Section title="Pulse — 3 numbers">
           <div className="grid md:grid-cols-3 gap-2">
-            <PulseCard label="waste / month" value={`$${(json.pulse.waste_per_month_usd?.value ?? 0).toLocaleString()}`} contrib={json.pulse.waste_per_month_usd?.top_contributor} fix={json.pulse.waste_per_month_usd?.fix_pointer} tone="neg" />
+            <PulseCard label="waste / month" value={`${sym}${(json.pulse.waste_per_month_usd?.value ?? 0).toLocaleString()}`} contrib={json.pulse.waste_per_month_usd?.top_contributor} fix={json.pulse.waste_per_month_usd?.fix_pointer} tone="neg" />
             <PulseCard label="demand captured" value={`${json.pulse.demand_captured_pct?.value ?? 0}%`} contrib={json.pulse.demand_captured_pct?.top_contributor} fix={json.pulse.demand_captured_pct?.fix_pointer} tone="live" />
             <PulseCard label="cpa efficiency" value={`${json.pulse.cpa_efficiency_ratio?.value ?? 0}×`} contrib={json.pulse.cpa_efficiency_ratio?.top_contributor} fix={json.pulse.cpa_efficiency_ratio?.fix_pointer} tone="info" />
           </div>
@@ -93,7 +95,7 @@ function BudgetOutput({ json }: { json: any }) {
                   <div className="text-ink-muted mt-0.5">{a.evidence}</div>
                   {a.fix ? <div className="text-pos mt-0.5">→ {a.fix}</div> : null}
                 </div>
-                <span className="font-mono text-[11px] text-neg tabular shrink-0">${(a.estimated_waste_usd ?? 0).toLocaleString()}</span>
+                <span className="font-mono text-[11px] text-neg tabular shrink-0">{sym}{(a.estimated_waste_usd ?? 0).toLocaleString()}</span>
               </li>
             ))}
           </ul>
@@ -107,7 +109,7 @@ function BudgetOutput({ json }: { json: any }) {
               <li key={i} className="flex items-center gap-2 border border-base-700 px-2 py-1.5 text-xs">
                 <span className="font-mono text-ink-faint w-5 tabular">{i + 1}</span>
                 <span className="flex-1 text-ink">{f.fix}</span>
-                <Kv k="rec" v={`$${f.estimated_recovery_usd?.toLocaleString() ?? 0}`} pos />
+                <Kv k="rec" v={`${sym}${f.estimated_recovery_usd?.toLocaleString() ?? 0}`} pos />
                 <Kv k="hr" v={f.effort_hours ?? 0} />
               </li>
             ))}

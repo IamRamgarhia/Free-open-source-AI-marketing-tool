@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Loader2, Sparkles, Check, X, AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
+import { Loader2, Sparkles, Check, X, AlertTriangle, ChevronDown, ChevronRight, StopCircle } from "lucide-react";
 import { ApiKeyGate } from "@/components/ApiKeyGate";
 import { PageHeader } from "@/components/PageHeader";
 import { Section, Pill } from "@/components/OutputBlocks";
@@ -43,6 +43,11 @@ function Inner() {
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<RunResult[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Master AbortController so the user can cancel an in-progress batch.
+  const abortRef = useRef<AbortController | null>(null);
+  function stopBatch() {
+    abortRef.current?.abort();
+  }
 
   // Shared asset config (one form for the whole batch — each client's brain
   // colors the output, but the asset spec is uniform across clients).
@@ -154,6 +159,8 @@ function Inner() {
     setError(null);
     if (!selected.size) return setError("Pick at least one client.");
     setRunning(true);
+    abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
     const chosen = brains.filter((b) => selected.has(b.id));
     const initial: RunResult[] = chosen.map((b) => ({
       brain_id: b.id,
@@ -163,7 +170,8 @@ function Inner() {
     setResults(initial);
 
     // Run all clients in parallel — each is one LLM call. Promise.allSettled so
-    // one failure doesn't drop the rest.
+    // one failure doesn't drop the rest. All share the master abort signal so
+    // a Stop click cancels every in-flight call.
     await Promise.allSettled(
       chosen.map(async (brain, i) => {
         setResults((cur) => cur.map((r, idx) => (idx === i ? { ...r, status: "running", text: "" } : r)));
@@ -177,6 +185,7 @@ function Inner() {
               messages: [{ role: "user", content: built.prompt }],
               maxTokens: built.max,
               temperature: 0.75,
+              signal,
             },
             {
               onDelta: (delta) => {
@@ -187,7 +196,11 @@ function Inner() {
           );
           const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
           addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
-          const json = tryParseJson<any>(res.text);
+          // Empty-text fallback — Gemini in particular occasionally returns
+          // res.text="" even when streaming worked correctly. Use accumulated
+          // buffer so saved ads always have content.
+          const finalText = res.text || accumulated;
+          const json = tryParseJson<any>(finalText);
 
           const ad: GeneratedAd = {
             id: crypto.randomUUID(),
@@ -197,7 +210,7 @@ function Inner() {
             title: `${built.campaign_type} · ${brain.business_name}`,
             input: { batch: true, kind: assetKind } as any,
             output_json: json,
-            output_text: res.text,
+            output_text: finalText,
             model_id: res.modelId,
             usage_input_tokens: res.usage?.input_tokens ?? 0,
             usage_output_tokens: res.usage?.output_tokens ?? 0,
@@ -404,10 +417,17 @@ function Inner() {
               <div className="border border-neg/40 bg-neg/5 text-neg text-[11px] px-3 py-2 font-mono uppercase tracking-ui-wide">{error}</div>
             ) : null}
 
-            <button onClick={runBatch} disabled={running || selected.size === 0} className="btn-primary w-full">
-              {running ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-              {running ? `Running ${selected.size} in parallel…` : `Generate for ${selected.size} client${selected.size === 1 ? "" : "s"}`}
-            </button>
+            <div className="flex gap-2">
+              <button onClick={runBatch} disabled={running || selected.size === 0} className="btn-primary flex-1">
+                {running ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                {running ? `Running ${selected.size} in parallel…` : `Generate for ${selected.size} client${selected.size === 1 ? "" : "s"}`}
+              </button>
+              {running ? (
+                <button onClick={stopBatch} className="btn-ghost" title="Cancel all in-flight calls">
+                  <StopCircle size={12} /> stop
+                </button>
+              ) : null}
+            </div>
             <p className="text-[10px] text-ink-subtle font-mono uppercase tracking-ui-wide">
               All runs fire in parallel. Each client's brand brain is used to color its own output.
             </p>

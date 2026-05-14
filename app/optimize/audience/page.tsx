@@ -30,7 +30,7 @@ const config: GeneratorConfig<AudienceTargetingInput & Record<string, unknown>> 
     { name: "goal", label: "Goal", kind: "text", required: true, placeholder: "trial signups · purchases · qualified leads" },
 
     // ----- Performance data -----
-    { name: "budget_monthly", label: "Budget / mo (USD)", kind: "text", required: true, section: "Performance data (last 7-30 days)", placeholder: "e.g. 3000", hint: "What you can spend per month total across all tiers." },
+    { name: "budget_monthly", label: "Budget / mo", kind: "text", required: true, section: "Performance data (last 7-30 days)", placeholder: "e.g. 3000", hint: "Your selected currency (see Settings). Total monthly across all tiers." },
     { name: "current_cpa", label: "Current CPA", kind: "text", placeholder: "e.g. $42", hint: "Cost per acquired customer / signup / lead so far." },
     { name: "current_cvr", label: "Current conversion rate", kind: "text", placeholder: "e.g. 2.1%", hint: "Click → goal completion rate." },
     { name: "current_aov_or_ltv", label: "AOV or LTV", kind: "text", placeholder: "e.g. $120 AOV / $480 LTV", hint: "Helps the AI rebalance toward higher-LTV cohorts." },

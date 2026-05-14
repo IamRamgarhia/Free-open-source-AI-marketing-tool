@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Loader2, Sparkles, ArrowLeft } from "lucide-react";
 import { ApiKeyGate } from "@/components/ApiKeyGate";
@@ -30,6 +30,10 @@ function Inner({ concept }: { concept: string }) {
   const [error, setError] = useState<string | null>(null);
   const [industry, setIndustry] = useState("");
   const [platform, setPlatform] = useState("");
+  const abortRef = useRef<AbortController | null>(null);
+  // Abort the in-flight streaming call on unmount so React doesn't get
+  // "update on unmounted component" warnings + we stop wasting API budget.
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   async function explain() {
     if (!def) return;
@@ -37,6 +41,7 @@ function Inner({ concept }: { concept: string }) {
     setDone(false);
     stream.reset();
     setRunning(true);
+    abortRef.current = new AbortController();
     try {
       const apiKey = getApiKey();
       if (!apiKey) {
@@ -51,6 +56,7 @@ function Inner({ concept }: { concept: string }) {
           messages: [{ role: "user", content: prompt }],
           maxTokens: 1500,
           temperature: 0.5,
+          signal: abortRef.current.signal,
         },
         { onDelta: stream.append }
       );
@@ -59,9 +65,10 @@ function Inner({ concept }: { concept: string }) {
       window.dispatchEvent(new Event("ados:usage"));
       setDone(true);
     } catch (e: any) {
-      setError(e?.message ?? "Failed");
+      if (e?.name !== "AbortError") setError(e?.message ?? "Failed");
     } finally {
       setRunning(false);
+      abortRef.current = null;
     }
   }
 

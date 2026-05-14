@@ -20,7 +20,7 @@ export interface LinkedInInput {
 import { WAVE_BATCH_RULE } from "./common-rules";
 
 export function buildLinkedInPrompt(input: LinkedInInput): string {
-  return `Generate a LinkedIn ${input.format.replace("_", " ")} campaign.
+  return `Generate a LinkedIn ${input.format.replace(/_/g, " ")} campaign.
 
 ${WAVE_BATCH_RULE}
 

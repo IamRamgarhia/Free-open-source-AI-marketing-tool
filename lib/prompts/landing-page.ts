@@ -10,6 +10,8 @@ export interface LandingPageInput {
   lcp?: string;
   mobile_pct?: string;
   primary_goal?: string;
+  /** Optional full-page screenshot for the AI to grade visual hierarchy. */
+  lp_screenshot?: unknown;
 }
 
 import { PRICING_PSYCHOLOGY } from "./common-rules";
@@ -40,7 +42,7 @@ INPUT — performance data:
 - LCP (Largest Contentful Paint): ${input.lcp || "(not provided)"}
 - Mobile traffic %: ${input.mobile_pct || "(not provided)"}
 
-IF AN IMAGE IS ATTACHED:
+${input.lp_screenshot ? `IMAGE ATTACHED:
 The user has dropped a full-page screenshot. JUDGE THE VISUAL HIERARCHY directly:
 - Is the H1 above the fold and the largest type on the page?
 - Is the primary CTA visible without scrolling, and clearly the strongest button?
@@ -50,7 +52,7 @@ The user has dropped a full-page screenshot. JUDGE THE VISUAL HIERARCHY directly
 Cite "(from screenshot)" in scores or fixes when the image — not the typed copy — drove the call.
 When typed copy and image conflict, trust the image (it's the live page).
 
-PHASE 1 — COMPUTE THE NUMBERS:
+` : ""}PHASE 1 — COMPUTE THE NUMBERS:
 - Conversion rate = conversions / visitors × 100 (2dp).
 - Bounce-vs-benchmark: typical paid LP bounce rate 50-70%. Flag if >75% (very high) or <40% (suspiciously low, likely tracking issue).
 - LCP verdict: ≤ 2.5s = good · 2.5-4s = needs improvement · > 4s = poor (also hurts Google QS).

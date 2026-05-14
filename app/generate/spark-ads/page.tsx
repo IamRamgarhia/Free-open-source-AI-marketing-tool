@@ -3,6 +3,7 @@
 import { GeneratorShell } from "@/components/GeneratorShell";
 import { Section, Pill, Kv } from "@/components/OutputBlocks";
 import { CopyButton } from "@/components/CopyButton";
+import { getCurrency } from "@/lib/currency";
 import { buildSparkAdsPrompt, type SparkInput } from "@/lib/prompts/tiktok-spark";
 import type { GeneratorConfig } from "@/lib/generator-config";
 
@@ -112,7 +113,7 @@ function SparkOutput({ json }: { json: any }) {
           <ul className="space-y-1 text-sm">
             <li className="flex gap-2"><Pill text="scale" tone="pos" /><span className="text-ink flex-1">{json.scale_rules.scale_when}</span></li>
             <li className="flex gap-2"><Pill text="kill" tone="neg" /><span className="text-ink flex-1">{json.scale_rules.kill_when}</span></li>
-            <li className="flex gap-2"><Pill text="cap" /><span className="text-ink flex-1">max ${json.scale_rules.max_spend_per_post_usd}/post</span></li>
+            <li className="flex gap-2"><Pill text="cap" /><span className="text-ink flex-1">max {getCurrency().symbol}{json.scale_rules.max_spend_per_post_usd}/post</span></li>
           </ul>
         </Section>
       ) : null}

@@ -16,12 +16,15 @@ const config: GeneratorConfig<ShoppingInput & Record<string, unknown>> = {
   fields: [
     { name: "product_title", label: "Current title", kind: "text", required: true, span: 2, placeholder: "e.g. Wool Crew Socks 3-Pack" },
     { name: "brand", label: "Brand", kind: "text", required: true, placeholder: "Acme" },
-    { name: "category", label: "Category", kind: "text", required: true, placeholder: "Apparel > Socks" },
-    { name: "price", label: "Price", kind: "text", placeholder: "$24.99" },
+    // Field name "product_category" instead of "category" so smart-fill (which
+    // aliases "category" → brain.industry) doesn't auto-populate the wrong value.
+    // Google Shopping's "Category" is the product taxonomy path, not the brand's vertical.
+    { name: "product_category", label: "Category", kind: "text", required: true, placeholder: "Apparel > Socks" },
+    { name: "price", label: "Price", kind: "text", placeholder: "24.99", hint: "Your selected currency (see Settings)." },
     { name: "attributes", label: "Key attributes (size/color/material)", kind: "textarea", required: true, rows: 2, placeholder: "Merino wool, 80%; sizes M-XL; black, navy, cream", span: 2 },
     { name: "current_description", label: "Current description", kind: "textarea", required: true, rows: 5, placeholder: "Paste the current product description", span: 2 },
   ],
-  initial: { product_title: "", brand: "", category: "", price: "", attributes: "", current_description: "" } as any,
+  initial: { product_title: "", brand: "", product_category: "", price: "", attributes: "", current_description: "" } as any,
   buildPrompt: (input) => buildShoppingPrompt(input as unknown as ShoppingInput),
   buildTitle: (i: any) => `Shopping · ${i.product_title?.slice(0, 30)}`,
   expectJson: true,
@@ -95,7 +98,7 @@ function ShoppingOutput({ json }: { json: any }) {
         </Section>
       ) : null}
 
-      {json?.policy_warnings?.length ? (
+      {Array.isArray(json?.policy_warnings) ? (
         <Section title="Policy warnings">
           {json.policy_warnings.length === 0 ? (
             <p className="text-pos text-sm">No warnings — listing looks Merchant Center-clean.</p>

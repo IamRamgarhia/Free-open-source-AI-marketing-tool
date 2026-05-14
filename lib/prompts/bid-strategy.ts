@@ -12,6 +12,8 @@ export interface BidStrategyInput {
   current_cpa?: string;
   target_cpa?: string;
   target_roas?: string;
+  /** Optional screenshot of Recommendations page or Conversions column. */
+  bid_screenshot?: unknown;
 }
 
 export function buildBidStrategyPrompt(input: BidStrategyInput): string {
@@ -47,12 +49,12 @@ INPUT — performance data:
 - Target CPA: ${input.target_cpa || "(not provided)"}
 - Target ROAS: ${input.target_roas || "(not provided)"}
 
-IF AN IMAGE IS ATTACHED:
+${input.bid_screenshot ? `IMAGE ATTACHED:
 The user has dropped a screenshot of their Recommendations page or Conversions column.
 Extract the visible metrics — current strategy, conversion counts, CPA trend arrows, and any
 Google "Recommendations" suggestions. Trust the image over typed fields when they conflict.
 
-PHASE 1 — SMART-BIDDING READINESS GATES:
+` : ""}PHASE 1 — SMART-BIDDING READINESS GATES:
 Check three gates. Each is ready / borderline / not_ready / unknown with a one-line observation:
   GATE A · WEEKLY CONVERSION VOLUME: compare conversions_last_7d to the threshold for the
     user's CURRENT strategy AND for the next-tier-up strategy. If 7d is missing, infer from

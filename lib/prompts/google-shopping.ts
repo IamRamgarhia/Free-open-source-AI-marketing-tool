@@ -10,7 +10,7 @@ export interface ShoppingInput {
   product_title: string;
   current_description: string;
   brand: string;
-  category: string;
+  product_category: string;
   attributes: string;
   price: string;
 }
@@ -33,9 +33,9 @@ INPUT:
 - Current title: ${input.product_title}
 - Current description: ${input.current_description}
 - Brand: ${input.brand}
-- Category: ${input.category}
+- Category: ${input.product_category}
 - Key attributes (size, color, material, etc.): ${input.attributes}
-- Price: ${input.price}
+- Price: ${input.price || "(not provided — do not invent pricing)"}
 
 GENERATE:
 1. Optimized title — apply the priority rule order. Self-count.

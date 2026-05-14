@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { Section, Pill, Kv } from "@/components/OutputBlocks";
 import { CopyButton } from "@/components/CopyButton";
 import { ProviderSwitcher } from "@/components/ProviderSwitcher";
+import { getCurrency } from "@/lib/currency";
 import { useThrottledStream } from "@/lib/stream-hook";
 import { getActiveBrainId, addUsage } from "@/lib/settings";
 import { llmStream, estimateCostUsd, tryParseJson } from "@/lib/llm";
@@ -39,10 +40,13 @@ function Inner() {
       const id = getActiveBrainId();
       const b = id ? (await getBrain(id)) ?? null : null;
       setBrain(b);
-      // Auto-run on first arrival when we have a brain + nothing yet
+      // Auto-run on first arrival. Pass the brain DIRECTLY so we don't depend
+      // on the next React render committing setBrain(b) — the previous
+      // setTimeout(() => run(), 400) closed over `brain` state which was still
+      // null at the render the setTimeout was scheduled in.
       if (b && !ranOnceRef.current) {
         ranOnceRef.current = true;
-        setTimeout(() => run(), 400);
+        runWithBrain(b);
       }
     };
     load();
@@ -52,8 +56,12 @@ function Inner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function run() {
-    if (!brain) {
+  function run() {
+    return runWithBrain(brain);
+  }
+
+  async function runWithBrain(b: BrandBrain | null) {
+    if (!b) {
       setError("No active Brand Brain. Add one at /brand first.");
       return;
     }
@@ -67,8 +75,8 @@ function Inner() {
     try {
       const res = await llmStream(
         {
-          system: buildBrandSystemPrompt(brain),
-          messages: [{ role: "user", content: buildSuggestedCampaignsPrompt(brain) }],
+          system: buildBrandSystemPrompt(b),
+          messages: [{ role: "user", content: buildSuggestedCampaignsPrompt(b) }],
           maxTokens: 5500,
           temperature: 0.75,
           signal: controller.signal,
@@ -86,10 +94,10 @@ function Inner() {
       setParsed(json);
       const ad: GeneratedAd = {
         id: crypto.randomUUID(),
-        brand_id: brain.id,
+        brand_id: b.id,
         platform: "google",
         campaign_type: "Suggested Campaigns",
-        title: `Suggestions · ${brain.name || brain.business_name}`,
+        title: `Suggestions · ${b.name || b.business_name}`,
         input: {},
         output_json: json,
         output_text: finalText,
@@ -179,7 +187,7 @@ function SuggestionsOutput({ json }: { json: any }) {
                   <span className="font-mono text-[10px] tabular text-ink-faint">#{i + 1}</span>
                   <Pill text={c.platform} tone="live" />
                   <Pill text={c.objective} />
-                  <span className="ml-auto text-[10px] font-mono uppercase tracking-ui-wide text-pos">${c.monthly_budget_usd}/mo</span>
+                  <span className="ml-auto text-[10px] font-mono uppercase tracking-ui-wide text-pos">{getCurrency().symbol}{c.monthly_budget_usd}/mo</span>
                 </div>
                 <h3 className="font-display italic text-2xl text-ink leading-tight">{c.name}</h3>
                 <p className="text-sm text-ink-muted mt-2 leading-relaxed">{c.why_this_brand}</p>

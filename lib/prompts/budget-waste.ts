@@ -11,9 +11,13 @@ export interface BudgetWasteInput {
 }
 
 import { MANDATORY_EXCLUSIONS, DIAGNOSIS_TREES } from "./common-rules";
+import { getCurrencyCode } from "../currency";
 
 export function buildBudgetWastePrompt(input: BudgetWasteInput): string {
+  const cc = getCurrencyCode();
   return `Audit this ad account for budget waste and produce a PULSE REPORT (not a letter grade).
+
+CURRENCY CONTEXT: All amounts in/out are in ${cc}. The field names below (e.g. waste_per_month_usd) carry the literal "_usd" suffix in the JSON schema for backwards compatibility, but the numeric VALUES should be in ${cc}.
 
 ${MANDATORY_EXCLUSIONS}
 
@@ -37,7 +41,7 @@ ANTI-VAGUENESS:
 
 INPUT:
 - Platform: ${input.platform}
-- Monthly spend: ${input.monthly_spend}
+- Monthly spend: ${cc} ${input.monthly_spend}
 - Campaign setup:
 """
 ${input.campaign_summary}

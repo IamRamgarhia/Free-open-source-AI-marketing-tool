@@ -1,3 +1,5 @@
+import { getCurrencyCode } from "../currency";
+
 export interface BudgetPlannerInput {
   total_monthly: string;
   goal: string;
@@ -9,10 +11,12 @@ export interface BudgetPlannerInput {
 }
 
 export function buildBudgetPlannerPrompt(input: BudgetPlannerInput): string {
-  return `Build a monthly ad budget plan. Be specific with dollar amounts — every line must add up to the total.
+  const cc = getCurrencyCode();
+  return `Build a monthly ad budget plan. Be specific with amounts in ${cc} — every line must add up to the total.
 
 INPUT:
-- Total monthly budget: ${input.total_monthly}
+- Currency: ${cc} (ALL amounts in the output should be in ${cc})
+- Total monthly budget: ${cc} ${input.total_monthly}
 - Goal: ${input.goal}
 - Business type: ${input.business_type}
 - Current AOV / LTV: ${input.current_aov_or_ltv}

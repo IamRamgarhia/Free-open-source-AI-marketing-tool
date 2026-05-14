@@ -43,7 +43,7 @@ function YouTubeOutput({ json }: { json: any }) {
     return (
       <div className="space-y-4 stagger">
         {json.variants.map((v: any, i: number) => (
-          <Section key={i} title={`Variant ${v.label}`} actions={<CopyButton text={Object.entries(v).filter(([k]) => !["label", "b_roll", "companion_banner"].includes(k)).map(([k, val]: any) => `${k}: ${typeof val === "string" ? val : `${val.vo} | ${val.visual}`}`).join("\n")} label="copy beats" />}>
+          <Section key={i} title={`Variant ${v.label}`} actions={<CopyButton text={Object.entries(v).filter(([k]) => !["label", "b_roll", "companion_banner"].includes(k)).map(([k, val]: any) => typeof val === "string" ? `${k}: ${val}` : `${k} [${val.t ?? "?"}]: ${val.vo} | ${val.visual}`).join("\n")} label="copy beats" />}>
             <div className="space-y-1.5 text-sm">
               {["hook", "problem", "solution", "proof", "cta"].map((k) =>
                 v[k] ? (

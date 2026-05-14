@@ -8,6 +8,8 @@ export interface KeywordInput {
   current_conversions_per_month?: number | string;
   target_cpa?: string;
   search_console_export?: string;
+  /** Optional Search Terms report screenshot. */
+  search_terms_screenshot?: unknown;
 }
 
 export function buildKeywordPrompt(input: KeywordInput): string {
@@ -37,13 +39,13 @@ INPUT — Search Console organic queries (optional, identifies SEO-overlap vs pa
 ${input.search_console_export || "(not provided)"}
 """
 
-IF AN IMAGE IS ATTACHED:
+${input.search_terms_screenshot ? `IMAGE ATTACHED:
 The user has dropped a screenshot of their Search Terms report. Extract each visible row:
 query · impressions · clicks · CTR · conversions · cost · added/excluded status. Use this
 EXACTLY as if it were pasted text. When typed text and image conflict, trust the image.
 Cite "(from screenshot)" in search_terms_analysis when image data drove a recommendation.
 
-PHASE 1 — ANALYZE THE SEARCH TERMS REPORT (the highest-leverage step):
+` : ""}PHASE 1 — ANALYZE THE SEARCH TERMS REPORT (the highest-leverage step):
 If search_terms_report is provided (or visible in screenshot), compute:
   - WASTE: total spend on queries with 0 conversions for ≥ X clicks (X depends on CPA target — 2× target CPA worth of clicks with zero conversions = clear waste).
   - HIGH-INTENT QUERIES: those that converted at or below target CPA. These deserve their own exact-match keyword + tighter ad group.

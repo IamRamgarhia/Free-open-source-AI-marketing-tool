@@ -13,6 +13,15 @@ export interface ContentCalendarInput {
 
 export function buildContentCalendarPrompt(input: ContentCalendarInput): string {
   const days = input.duration === "1_week" ? 7 : input.duration === "2_weeks" ? 14 : 30;
+  const platformCount = input.platforms.split(/[,\s]+/).filter(Boolean).length || 1;
+  const cadencePerWeek = Number(input.cadence_per_week) || 3;
+  const estimatedEntries = Math.ceil((days / 7) * cadencePerWeek * platformCount);
+  // 6500 tokens budget / ~150 tokens per entry → ~43 entries fit. If the user
+  // asked for more, instruct the model to cap at the budget rather than
+  // truncating mid-JSON. (Audit HIGH: 1-month × 3-platform × 3/wk = 90 entries,
+  // exceeds budget → silent JSON parse failure.)
+  const HARD_ENTRY_CAP = 35;
+  const tooMany = estimatedEntries > HARD_ENTRY_CAP;
   return `Generate an organic social media content calendar — full post specs, captions, hashtags, visual + video creative briefs with AI-tool recommendations.
 
 ${VIDEO_HOOK_RULE}
@@ -21,6 +30,14 @@ INPUT:
 - Total duration: ${days} days
 - Cadence: ~${input.cadence_per_week} posts / week per platform
 - Platforms in scope: ${input.platforms}
+${tooMany ? `
+IMPORTANT — TOKEN BUDGET:
+- The user's selection (${days} days × ${platformCount} platforms × ${cadencePerWeek}/wk) would produce ~${estimatedEntries} entries.
+- That EXCEEDS the response token budget and would truncate the JSON mid-array.
+- HARD CAP: produce at most ${HARD_ENTRY_CAP} TOTAL calendar entries.
+- Strategy: PRIORITIZE the most leveraged days (Mon/Wed/Fri across each platform). If platforms compete, prefer the platform with the most pillars overlap.
+- Add a top-level "truncation_notice": "Output capped at ${HARD_ENTRY_CAP} of ~${estimatedEntries} entries to fit response budget. Re-run with a shorter duration or fewer platforms for the rest."
+` : ""}
 - Content pillars (themes that should recur): ${input.pillars}
 - Primary goal of the calendar (awareness / engagement / lead gen / nurture / sales): ${input.primary_goal}
 - Voice notes: ${input.voice_notes || "(use brand brain default)"}

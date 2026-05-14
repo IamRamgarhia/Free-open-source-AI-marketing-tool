@@ -33,6 +33,8 @@ export interface CtrInput {
   reporting_window?: string;
   goal?: string;
   audience_one_liner?: string;
+  /** Optional ad-dashboard screenshot. Block fires only when present. */
+  dashboard_screenshot?: unknown;
 }
 
 import { CREATIVE_TESTING_HIERARCHY, DIAGNOSIS_TREES } from "./common-rules";
@@ -66,7 +68,7 @@ INPUT — top search terms / queries triggering this ad:
 ${input.search_terms || "(not provided)"}
 """
 
-IF AN IMAGE IS ATTACHED:
+${input.dashboard_screenshot ? `IMAGE ATTACHED:
 The user has dropped a screenshot of their ads dashboard. Read it. Extract impressions,
 clicks, conversions, spend, CTR, CPC, conversion rate, search terms, and anything else
 visible. When the typed fields above conflict with what's in the image, trust the image
@@ -74,7 +76,7 @@ visible. When the typed fields above conflict with what's in the image, trust th
 the typed fields, USE the image value. Cite "(from screenshot)" in the diagnosis_summary
 or notes when image-derived data drives a conclusion.
 
-PHASE 1 — ANALYZE THE NUMBERS FIRST (do not skip):
+` : ""}PHASE 1 — ANALYZE THE NUMBERS FIRST (do not skip):
 - Compute CTR = clicks / impressions × 100, rounded to 2dp.
 - Compute conversion rate = conversions / clicks × 100, rounded to 2dp.
 - Compute CPA = spend / conversions if both present.

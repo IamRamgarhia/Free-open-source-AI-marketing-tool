@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Sparkles, Save, Loader2, Globe, RefreshCw } from "lucide-react";
 import { emptyBrandBrain, type BrandBrain } from "@/lib/brand-brain";
@@ -73,6 +73,10 @@ export function BrandBrainForm({ initial }: Props) {
   const router = useRouter();
   const [brain, setBrain] = useState<BrandBrain>(initial ?? emptyBrandBrain());
   const [saving, setSaving] = useState(false);
+  // Abort in-flight AI calls on unmount so streaming continuations don't
+  // setState on a dead component (React warning + wasted API budget).
+  const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => abortRef.current?.abort(), []);
   const [extracting, setExtracting] = useState(false);
   const [extractInput, setExtractInput] = useState({
     description: "",
@@ -119,12 +123,14 @@ export function BrandBrainForm({ initial }: Props) {
       return;
     }
     setExtracting(true);
+    abortRef.current = new AbortController();
     try {
       const prompt = buildBrandExtractionPrompt(extractInput);
       const res = await llmCall({
         messages: [{ role: "user", content: prompt }],
         maxTokens: 3000,
         temperature: 0.4,
+        signal: abortRef.current.signal,
       });
       const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
       addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
@@ -134,15 +140,14 @@ export function BrandBrainForm({ initial }: Props) {
         setError("Model returned non-JSON. You can edit fields manually.");
         return;
       }
-      setBrain((b) => ({
-        ...b,
-        ...parsed,
-        name: b.name || parsed.business_name || "",
-      } as BrandBrain));
+      // Use mergeFillEmpty so the user's already-typed values are preserved.
+      // Previous behavior (direct spread) clobbered manual edits with AI values.
+      setBrain((b) => mergeFillEmpty(b, parsed, { url: b.website_url ?? "", deterministic: {} }));
     } catch (e: any) {
-      setError(e?.message ?? "Extraction failed");
+      if (e?.name !== "AbortError") setError(e?.message ?? "Extraction failed");
     } finally {
       setExtracting(false);
+      abortRef.current = null;
     }
   }
 
@@ -154,6 +159,7 @@ export function BrandBrainForm({ initial }: Props) {
       return;
     }
     setExtracting(true);
+    abortRef.current = new AbortController();
     try {
       const social = detectSocial(url);
       if (social) {
@@ -161,7 +167,7 @@ export function BrandBrainForm({ initial }: Props) {
         setError(`${social.platform} pages can't be read by the browser-side reader. Opened in a new tab — copy bio + recent posts back into the "Customer reviews" / "Website content" boxes, then click Extract.`);
         return;
       }
-      const r = await ingestUrl(url);
+      const r = await ingestUrl(url, abortRef.current.signal);
       if (!r.ok) {
         setError(r.message);
         return;
@@ -178,6 +184,7 @@ export function BrandBrainForm({ initial }: Props) {
         messages: [{ role: "user", content: prompt }],
         maxTokens: 3000,
         temperature: 0.4,
+        signal: abortRef.current.signal,
       });
       const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
       addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
@@ -190,9 +197,10 @@ export function BrandBrainForm({ initial }: Props) {
         setBrain((b) => mergeFillEmpty(b, parsed, { url, deterministic: deterministicFillFromMetadata(r.metadata, r.url) }));
       }
     } catch (e: any) {
-      setError(e?.message ?? "URL ingest failed");
+      if (e?.name !== "AbortError") setError(e?.message ?? "URL ingest failed");
     } finally {
       setExtracting(false);
+      abortRef.current = null;
     }
   }
 
@@ -322,7 +330,7 @@ export function BrandBrainForm({ initial }: Props) {
       await saveBrain(toSave);
       setActiveBrainId(toSave.id);
       window.dispatchEvent(new Event("ados:brains-changed"));
-      router.push("/");
+      router.push("/brand");
     } catch (e: any) {
       setError(e?.message ?? "Save failed");
     } finally {

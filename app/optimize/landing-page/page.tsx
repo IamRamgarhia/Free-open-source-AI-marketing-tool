@@ -14,9 +14,9 @@ const config: GeneratorConfig<LandingPageInput & Record<string, unknown>> = {
   campaign_type: "LP Grade",
   maxTokens: 4000,
   fields: [
-    { name: "landing_page_url", label: "Landing page URL", kind: "text", section: "Page", placeholder: "https://example.com/lp", span: 2 },
+    { name: "landing_page_url", label: "Landing page URL (reference only — see hint)", kind: "text", section: "Page", placeholder: "https://example.com/lp", span: 2, hint: "AI cannot fetch the page from this URL. Paste the actual copy in the Landing page copy box below, or drop a screenshot in the optional field. URL is for your reference + saved-history breadcrumb." },
     { name: "ad_promise", label: "Ad promise (exact wording the visitor clicked)", kind: "text", required: true, placeholder: "Get 50% off your first month", span: 2 },
-    { name: "landing_copy", label: "Landing page copy", kind: "textarea", required: true, rows: 8, placeholder: "Paste H1 + subhead + above-the-fold + first sections.", span: 2 },
+    { name: "landing_copy", label: "Landing page copy", kind: "textarea", required: true, rows: 8, placeholder: "Paste H1 + subhead + above-the-fold + first sections. (AI reads what you paste here, not the URL.)", span: 2 },
     { name: "audience", label: "Audience", kind: "text", required: true, placeholder: "Solo founders, 25-40, US/CA", span: 2 },
 
     // ----- Performance data -----

@@ -186,13 +186,17 @@ function Inner() {
             PHASE_TIMEOUT_MS
           );
           try {
+            // Compose master wizard abort + fallback timeout so Stop button
+            // still cancels the fallback retry. Without args.signal here, the
+            // user clicking Stop while in fallback would leave it running.
+            const fallbackCombined = anySignal([args.signal, fallbackCtl.signal].filter(Boolean) as AbortSignal[]);
             const res = await llmStream(
               {
                 system,
                 messages: [{ role: "user", content: args.prompt }],
                 maxTokens: args.maxTokens,
                 temperature: 0.7,
-                signal: fallbackCtl.signal,
+                signal: fallbackCombined,
                 providerOverride: fallbackProvider,
                 apiKeyOverride: fallbackKey,
               },

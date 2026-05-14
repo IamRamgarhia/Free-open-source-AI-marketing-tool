@@ -37,15 +37,20 @@ const config: GeneratorConfig<HashtagInput & Record<string, unknown>> = {
   buildPrompt: (input) => buildHashtagPrompt(input as unknown as HashtagInput),
   buildTitle: (i: any) => `Hashtags · ${i.platform} · ${i.title?.slice(0, 28)}`,
   expectJson: true,
-  renderJson: (json) => <HashtagOutput json={json} platform={(config.initial as any).platform} />,
+  renderJson: (json) => <HashtagOutput json={json} />,
 };
 
 export default function Page() {
   return <GeneratorShell config={config} scope="generate/hashtags" />;
 }
 
-function HashtagOutput({ json }: { json: any; platform: string }) {
-  const recommended = json?.[`recommended_set_for_${json?.recommended_platform || "instagram"}`] || json?.recommended_set || [];
+function HashtagOutput({ json }: { json: any }) {
+  // The AI emits a platform-keyed bucket like `recommended_set_for_tiktok`.
+  // Discover the key dynamically rather than hardcoding the platform — earlier
+  // versions referenced the static config.initial.platform which always read
+  // "instagram", so non-IG platforms always showed an empty recommended set.
+  const recommendedKey = json ? Object.keys(json).find((k) => k.startsWith("recommended_set_for_")) : null;
+  const recommended = (recommendedKey ? json[recommendedKey] : null) || json?.recommended_set || [];
   const allTags = [
     ...(json?.tiers?.broad ?? []).map((x: any) => x.tag),
     ...(json?.tiers?.medium ?? []).map((x: any) => x.tag),

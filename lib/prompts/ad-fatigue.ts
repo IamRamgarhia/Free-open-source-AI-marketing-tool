@@ -13,6 +13,10 @@ export interface FatigueInput {
   conversions_week_1?: number | string;
   conversions_week_latest?: number | string;
   negative_feedback_seen?: string;
+  /** Optional performance-graph screenshot. When present, the prompt's
+   *  "IF AN IMAGE IS ATTACHED" block fires; absent → block is omitted so
+   *  the AI doesn't hallucinate graph-derived observations. */
+  fatigue_screenshot?: unknown;
 }
 
 import { RETIRE_THRESHOLD_RULE } from "./common-rules";
@@ -40,12 +44,12 @@ INPUT — weekly performance (week 1 vs latest week):
 - Current frequency: ${input.current_frequency || "(not provided)"}
 - Negative-feedback score (Meta only): ${input.negative_feedback_seen || "(not provided)"}
 
-IF AN IMAGE IS ATTACHED:
+${input.fatigue_screenshot ? `IMAGE ATTACHED:
 The user has dropped a performance graph (Meta delivery insights / TikTok analytics / Google Display).
 Read the trend lines directly: frequency arc, CTR slope, CPM slope, conversion fall-off. Cite "(from
 screenshot)" when the image — not the typed numbers — drives a severity call.
 
-PHASE 1 — COMPUTE THE DECAY %s:
+` : ""}PHASE 1 — COMPUTE THE DECAY %s:
 - reach_decay = (impressions_week_latest / impressions_week_1) − 1 → as percentage
 - ctr_decay = (ctr_latest − ctr_week_1) / ctr_week_1 → as percentage (negative means decay)
 - cpm_creep = (cpm_latest − cpm_week_1) / cpm_week_1 → as percentage
