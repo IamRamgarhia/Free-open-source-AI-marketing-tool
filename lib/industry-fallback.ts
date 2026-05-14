@@ -1,6 +1,34 @@
 import { INDUSTRY_TEMPLATES } from "./industry-templates";
 import type { BrandBrain } from "./brand-brain";
 
+/** Last-resort defaults applied when no industry template keyword matches AND
+ *  the AI passes left fields empty. Values are deliberately generic but
+ *  non-empty so the form never ships with blank inference fields.
+ *  User can edit anything before saving. */
+const GENERIC_FALLBACK: Partial<BrandBrain> = {
+  tone: "Confident, clear, customer-focused",
+  personality_traits: ["Helpful", "Knowledgeable", "Direct"],
+  writing_style: "Short, plain-language sentences. Lead with the customer benefit.",
+  audience_who: "Decision-makers researching options in this category",
+  audience_pain_points: ["Not enough time to evaluate every option", "Hard to tell real differentiators from marketing fluff", "Worried about wasting budget"],
+  audience_desires: ["A clear answer that fits their situation", "Confidence in the choice", "Results, not just promises"],
+  audience_demographics: "Adult consumers / professionals (25-55), English-speaking, online-savvy",
+  key_benefits: ["Solves the core problem in this category", "Saves time vs alternatives", "Backed by people who actually know what they're doing"],
+  key_messages: ["We focus on what actually matters for your outcome", "Built for real-world use, not marketing demos"],
+  words_to_use: ["actually", "specifically", "what matters", "real results", "in practice"],
+  words_to_avoid: ["world-class", "best-in-class", "synergy", "leverage", "transform"],
+  competitors: ["Larger incumbents", "DIY / free alternatives", "Other specialists in this category"],
+  differentiators: ["Personal attention vs. assembly-line operations", "Real outcomes over impressive promises"],
+  price_positioning: "Mid-market — fair value for what you get",
+  objections: ["How long does this take?", "What if it doesn't work for my situation?", "What does it actually cost?"],
+  objection_handling: [
+    "Most customers see results within the first cycle — specific timelines depend on inputs you provide upfront.",
+    "We start with discovery so we can confirm fit before any commitment.",
+    "Pricing is transparent and scoped to what you actually need — we'll quote before work starts.",
+  ],
+  content_pillars: ["Educational deep-dives", "Customer outcomes + case studies", "Behind-the-scenes / how we work", "Industry commentary"],
+};
+
 /**
  * After the AI extraction passes finish, some inference fields commonly stay
  * empty when the model is light (Gemini Flash, free-tier Llama). Rather than
@@ -58,13 +86,23 @@ export function pickClosestTemplate(industry: string, niche: string): string | n
  */
 export function applyIndustryFallback(brain: BrandBrain): { brain: BrandBrain; filled: string[]; templateSlug: string | null } {
   const slug = pickClosestTemplate(brain.industry || "", brain.niche || "");
-  if (!slug) return { brain, filled: [], templateSlug: null };
+  let filled: Partial<BrandBrain>;
+  let usedSlug: string | null = slug;
 
-  const template = INDUSTRY_TEMPLATES.find((t) => t.slug === slug);
-  if (!template) return { brain, filled: [], templateSlug: null };
-
-  // Get the template's filled values by applying it with no overrides.
-  const filled = template.apply({ business_name: brain.business_name || "Your Brand" });
+  if (slug) {
+    const template = INDUSTRY_TEMPLATES.find((t) => t.slug === slug);
+    if (template) {
+      filled = template.apply({ business_name: brain.business_name || "Your Brand" });
+    } else {
+      filled = GENERIC_FALLBACK;
+      usedSlug = "generic";
+    }
+  } else {
+    // No keyword match — use generic defaults so the user is never left with
+    // a blank form. Better a generic non-empty starting point than empty.
+    filled = GENERIC_FALLBACK;
+    usedSlug = "generic";
+  }
   const out: any = { ...brain };
   const touched: string[] = [];
 
@@ -92,5 +130,5 @@ export function applyIndustryFallback(brain: BrandBrain): { brain: BrandBrain; f
     }
   }
 
-  return { brain: out as BrandBrain, filled: touched, templateSlug: slug };
+  return { brain: out as BrandBrain, filled: touched, templateSlug: usedSlug };
 }

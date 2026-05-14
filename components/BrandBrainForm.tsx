@@ -8,6 +8,7 @@ import { saveBrain } from "@/lib/storage";
 import { setActiveBrainId, addUsage } from "@/lib/settings";
 import { llmCall, estimateCostUsd, tryParseJson } from "@/lib/llm";
 import { buildBrandExtractionPrompt } from "@/lib/prompts/brand-extraction";
+import { buildSearchAugmentedPrompt } from "@/lib/prompts/brand-search-augmented";
 import { ingestUrl, ingestSubpages, detectSocial } from "@/lib/url-ingest";
 import { applyIndustryFallback } from "@/lib/industry-fallback";
 import { deterministicFillFromMetadata } from "@/lib/deterministic-brand-fill";
@@ -195,9 +196,17 @@ export function BrandBrainForm({ initial }: Props) {
     }
   }
 
-  /** "Fill empty with AI" — re-ingests the brand's saved website_url, runs the
-   *  AI extraction, and fills ONLY the fields the user has left blank. Safe
-   *  to click on an in-progress edit without losing manual changes. */
+  /** "Fill empty with AI" — runs the FULL onboarding pipeline against the
+   *  brand's saved website_url and merges into empty fields only. Safe
+   *  to click on an in-progress edit without losing manual changes.
+   *
+   *  Runs the same 4 passes as new-brand onboarding:
+   *    1. Homepage + subpages ingest
+   *    2. AI extraction from page content
+   *    3. AI gap-fill for fields still empty
+   *    4. Google search augmentation for inference fields
+   *    5. Industry-template fallback for anything still empty
+   */
   async function fillEmptyWithAi() {
     setError(null);
     const url = (brain.website_url || "").trim();
@@ -207,33 +216,73 @@ export function BrandBrainForm({ initial }: Props) {
     }
     setExtracting(true);
     try {
+      // PASS 1: Homepage + subpages
       const r = await ingestUrl(url);
       if (!r.ok) { setError(r.message); return; }
-      // Pull subpages too — much richer signal.
       let content = r.content;
       try {
         const sub = await ingestSubpages(r, undefined, 3);
         if (sub.pages.length) content = r.content + sub.extraContent;
       } catch {}
       const det = deterministicFillFromMetadata(r.metadata, r.url);
-      const prompt = buildBrandExtractionPrompt({
-        website_content: content,
-        description: `Brand at ${url}`,
-        audience_notes: "",
-        reviews: "",
-        metadata: r.metadata,
-        prefilled: { business_name: brain.business_name, industry: brain.industry, niche: brain.niche, usp: brain.usp },
-      });
+
+      // PASS 2: AI extraction from page content
       const res = await llmCall({
-        messages: [{ role: "user", content: prompt }],
+        messages: [{ role: "user", content: buildBrandExtractionPrompt({
+          website_content: content,
+          description: `Brand at ${url}`,
+          audience_notes: "",
+          reviews: "",
+          metadata: r.metadata,
+          prefilled: { business_name: brain.business_name, industry: brain.industry, niche: brain.niche, usp: brain.usp },
+        }) }],
         maxTokens: 3000,
         temperature: 0.7,
       });
-      const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
-      addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+      addUsage(estimateCostUsd(res.providerId, res.modelId, res.usage), res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
       window.dispatchEvent(new Event("ados:usage"));
-      const parsed = tryParseJson<Partial<BrandBrain>>(res.text) ?? {};
-      setBrain((b) => mergeFillEmpty(b, parsed, { url, deterministic: det }));
+      const parsed: any = tryParseJson<any>(res.text) ?? {};
+
+      // PASS 3: Google search augmentation. ALWAYS runs in this fill-empty flow.
+      const searchableName = brain.business_name || parsed.business_name || det.business_name;
+      if (searchableName && searchableName.length > 2) {
+        const industryHint = (brain.industry || parsed.industry || det.industry || "").split(/[|·,]/)[0].trim();
+        const baseQuery = industryHint ? `${searchableName} ${industryHint} reviews competitors customers` : `${searchableName} reviews competitors`;
+        try {
+          const searchRes = await ingestUrl(`https://s.jina.ai/${encodeURIComponent(baseQuery)}`);
+          if (searchRes.ok && searchRes.content && searchRes.content.length > 500) {
+            const augRes = await llmCall({
+              messages: [{ role: "user", content: buildSearchAugmentedPrompt({
+                business_name: searchableName,
+                industry: brain.industry || parsed.industry || det.industry,
+                niche: brain.niche || parsed.niche || det.niche,
+                usp: brain.usp || parsed.usp || det.usp,
+                search_content: searchRes.content,
+                missing_fields: ["tone", "audience_who", "audience_pain_points", "audience_desires", "key_benefits", "competitors", "objections", "objection_handling", "words_to_use", "content_pillars"],
+              }) }],
+              maxTokens: 2500,
+              temperature: 0.7,
+            });
+            addUsage(estimateCostUsd(augRes.providerId, augRes.modelId, augRes.usage), augRes.usage?.input_tokens ?? 0, augRes.usage?.output_tokens ?? 0);
+            window.dispatchEvent(new Event("ados:usage"));
+            const augParsed: any = tryParseJson<any>(augRes.text) ?? {};
+            // Merge augParsed into parsed for any field parsed left empty
+            for (const k of Object.keys(augParsed)) {
+              const cur = parsed[k];
+              if (cur == null || (Array.isArray(cur) && !cur.length) || (typeof cur === "string" && !cur.trim())) {
+                parsed[k] = augParsed[k];
+              }
+            }
+          }
+        } catch {}
+      }
+
+      // PASS 4: Merge into brain (fill-empty only) → industry fallback for anything still empty
+      setBrain((b) => {
+        const merged = mergeFillEmpty(b, parsed as Partial<BrandBrain>, { url, deterministic: det });
+        const { brain: withFallback } = applyIndustryFallback(merged);
+        return withFallback;
+      });
     } catch (e: any) {
       setError(e?.message ?? "Fill failed");
     } finally {

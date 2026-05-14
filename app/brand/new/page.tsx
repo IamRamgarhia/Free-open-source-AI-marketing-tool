@@ -353,14 +353,19 @@ function Inner() {
         if (typeof v === "string" && !v.trim()) continue;
         merged1[k] = v;
       }
+      // GUARANTEED passes (full mode): we ALWAYS run gap-fill + auto-Google so
+      // every onboarding pulls maximum signal. Light mode skips both.
+      // The "missing" set is computed for prompt-targeting only, not as a gate.
       const missing: string[] = GAP_FILL_FIELDS.filter((f) => isEmptyField(merged1[f]));
-      // objections and objection_handling are paired arrays — if one is missing
-      // we must regenerate both together so the indices line up. (Audit finding #63.)
       if (missing.includes("objections") && !missing.includes("objection_handling")) missing.push("objection_handling");
       if (missing.includes("objection_handling") && !missing.includes("objections")) missing.push("objections");
-      // Light mode skips both gap-fill + auto-search to save cost; pass 1 + industry fallback only.
-      if (missing.length && !lightMode) {
-        setQuickStatus(`⑤ Filling gaps — ${missing.length} field${missing.length === 1 ? "" : "s"} still empty. Re-asking AI to infer from content…`);
+      // Force-include core inference fields if pass 1 was completely empty —
+      // gives the gap-fill prompt a meaningful field list to anchor on.
+      if (missing.length === 0 && Object.keys(parsed).length < 8) {
+        missing.push("tone", "audience_who", "audience_pain_points", "audience_desires", "key_benefits");
+      }
+      if (!lightMode && missing.length) {
+        setQuickStatus(`⑤ AI pass 2 — gap-fill (re-asking for ${missing.length} inference field${missing.length === 1 ? "" : "s"})…`);
         try {
           const gapRes = await llmCall({
             messages: [{ role: "user", content: buildBrandGapFillPrompt({
@@ -401,21 +406,23 @@ function Inner() {
         }
       }
 
-      // Pass 3 — auto Google search. The homepage rarely contains customer
-      // reviews, competitor mentions, or audience language; a Google search
-      // for the brand name pulls in review sites, forums, press — much
-      // richer signal for the inference fields. Only runs if pass 1 + gap-fill
-      // left something empty AND we have a usable brand name to search for.
+      // PASS 3 — ALWAYS runs in full mode (not gated on missing fields). The
+      // homepage rarely contains customer reviews, competitor mentions, or
+      // audience language; Google search pulls review sites, forums, press —
+      // the richest signal for inference fields. Skipped only in light mode.
       const stillMissing = GAP_FILL_FIELDS.filter((f) => isEmptyField(parsed[f]));
+      // For the prompt, target both still-empty fields AND core inference
+      // fields (so search can refine even fields that are already filled).
+      const searchTargets = stillMissing.length
+        ? stillMissing
+        : ["tone", "audience_who", "audience_pain_points", "audience_desires", "key_benefits", "competitors", "objections", "objection_handling", "words_to_use"];
       const searchableName = deterministic.business_name || parsed.business_name;
-      if (stillMissing.length && searchableName && searchableName.length > 2 && !lightMode) {
-        // Build a focused query: brand name + industry keyword to disambiguate
-        // and bias toward reviews / mentions.
+      if (searchableName && searchableName.length > 2 && !lightMode) {
         const industryHint = (deterministic.industry || parsed.industry || "").split(/[|·,]/)[0].trim();
         const baseQuery = industryHint
           ? `${searchableName} ${industryHint} reviews competitors customers`
           : `${searchableName} reviews competitors`;
-        setQuickStatus(`⑥ Auto-searching Google for "${searchableName}" to fill ${stillMissing.length} remaining gap${stillMissing.length === 1 ? "" : "s"}…`);
+        setQuickStatus(`⑥ AI pass 3 — Google search for "${searchableName}" to pull reviews / competitors / customer language…`);
         try {
           const searchUrl = `https://s.jina.ai/${encodeURIComponent(baseQuery)}`;
           const searchRes = await ingestUrl(searchUrl, signal);
@@ -428,7 +435,7 @@ function Inner() {
                 niche: deterministic.niche || parsed.niche,
                 usp: deterministic.usp || parsed.usp,
                 search_content: searchRes.content,
-                missing_fields: stillMissing as unknown as string[],
+                missing_fields: searchTargets as unknown as string[],
               }) }],
               maxTokens: 2500,
               temperature: 0.7,
@@ -440,7 +447,10 @@ function Inner() {
             window.dispatchEvent(new Event("ados:usage"));
             const augParsed = tryParseJson<any>(augRes.text) ?? {};
             dlog("[adforge:brand-extract] parsed AI JSON (search-augmented):", augParsed);
-            for (const f of stillMissing) {
+            // For fields already filled by pass 1+2, search-augmented values
+            // do NOT overwrite — only fills empty fields. Pass 1 result wins.
+            for (const f of searchTargets) {
+              if (!isEmptyField(parsed[f])) continue;
               const coerced = coerceFieldValue(f, augParsed[f]);
               if (!isEmptyField(coerced)) parsed[f] = coerced;
             }
