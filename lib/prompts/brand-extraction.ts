@@ -103,8 +103,8 @@ HONESTY FLOOR (never crossable — different from inference):
 - NEVER invent specific numbers, percentages, customer counts, awards, certifications, or named partnerships.
 - NEVER invent specific testimonials or quotes the content doesn't have.
 - "voc_phrases" must be REAL phrases from the reviews — exact wording. If no reviews provided, return [].
-- Inference (deducing the obvious from explicit content) is fine. Fabrication (making up unverifiable facts) is not.
-- When unsure between two interpretations, pick the more conservative one BUT STILL FILL THE FIELD.
+- Inference (deducing the obvious from explicit content) is fine and REQUIRED for tone, audience, pain points, desires, benefits, messages, products, pillars, traits, words, differentiators, objections. Fabrication (making up unverifiable specifics) is not.
+- An EMPTY field on the list above is a FAILED extraction. Even when uncertain, write a reasonable inference based on the content + industry norms. Empty arrays are only acceptable for voc_phrases/voc_*_quotes/best_performing_angles/failed_angles, which require real reviews/ad data.
 
 ═══════════════════════════════════════════════════════════════
 

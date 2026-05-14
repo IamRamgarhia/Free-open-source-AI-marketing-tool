@@ -14,7 +14,28 @@ import { ingestUrl, ingestPasted } from "@/lib/url-ingest";
 import { INDUSTRY_TEMPLATES } from "@/lib/industry-templates";
 import { llmCall, estimateCostUsd, tryParseJson } from "@/lib/llm";
 import { buildBrandExtractionPrompt } from "@/lib/prompts/brand-extraction";
+import { buildBrandGapFillPrompt } from "@/lib/prompts/brand-gap-fill";
 import { deterministicFillFromMetadata } from "@/lib/deterministic-brand-fill";
+
+// Fields the gap-fill second pass is allowed to attempt. Excludes deterministic
+// fields (business_name, industry, etc.) and the no-fabrication fields
+// (voc_*, *_angles).
+const GAP_FILL_FIELDS = [
+  "tone", "personality_traits", "writing_style",
+  "audience_who", "audience_pain_points", "audience_desires", "audience_demographics",
+  "products", "platforms", "content_pillars",
+  "key_benefits", "key_messages",
+  "words_to_use", "words_to_avoid",
+  "competitors", "differentiators", "price_positioning",
+  "objections", "objection_handling",
+] as const;
+
+function isEmptyField(v: unknown): boolean {
+  if (v == null) return true;
+  if (Array.isArray(v)) return v.length === 0;
+  if (typeof v === "string") return v.trim() === "";
+  return false;
+}
 
 export default function BrandOnboardingPage() {
   return (
@@ -140,16 +161,56 @@ function Inner() {
           },
         }) }],
         maxTokens: 3000,
-        temperature: 0.4,
+        temperature: 0.7,
       });
       console.log("[adforge:brand-extract] raw AI response text:", res.text);
       const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
       addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
       window.dispatchEvent(new Event("ados:usage"));
-      const parsed = tryParseJson<any>(res.text);
-      console.log("[adforge:brand-extract] parsed AI JSON:", parsed);
-      setQuickStatus("④ Merging metadata + AI results…");
+      const parsed = tryParseJson<any>(res.text) ?? {};
+      console.log("[adforge:brand-extract] parsed AI JSON (pass 1):", parsed);
       const fallback = new URL(r.url).hostname.replace(/^www\./, "");
+
+      // Pass 2 — gap-fill. Any inference field still empty gets a focused
+      // second AI call. This is the "ask AI to guess from the content" pass.
+      const merged1: any = { ...parsed };
+      for (const [k, v] of Object.entries(deterministic)) {
+        if (v == null) continue;
+        if (Array.isArray(v) && !v.length) continue;
+        if (typeof v === "string" && !v.trim()) continue;
+        merged1[k] = v;
+      }
+      const missing = GAP_FILL_FIELDS.filter((f) => isEmptyField(merged1[f]));
+      if (missing.length) {
+        setQuickStatus(`④ Filling gaps — ${missing.length} field${missing.length === 1 ? "" : "s"} still empty. Re-asking AI to infer from content…`);
+        try {
+          const gapRes = await llmCall({
+            messages: [{ role: "user", content: buildBrandGapFillPrompt({
+              business_name: deterministic.business_name || parsed.business_name || fallback,
+              industry: deterministic.industry || parsed.industry,
+              niche: deterministic.niche || parsed.niche,
+              usp: deterministic.usp || parsed.usp,
+              website_content: r.content,
+              missing_fields: missing as unknown as string[],
+            }) }],
+            maxTokens: 2000,
+            temperature: 0.8,
+          });
+          console.log("[adforge:brand-extract] raw AI response text (gap-fill):", gapRes.text);
+          const gapCost = estimateCostUsd(gapRes.providerId, gapRes.modelId, gapRes.usage);
+          addUsage(gapCost, gapRes.usage?.input_tokens ?? 0, gapRes.usage?.output_tokens ?? 0);
+          window.dispatchEvent(new Event("ados:usage"));
+          const gapParsed = tryParseJson<any>(gapRes.text) ?? {};
+          console.log("[adforge:brand-extract] parsed AI JSON (gap-fill):", gapParsed);
+          for (const f of missing) {
+            if (!isEmptyField(gapParsed[f])) parsed[f] = gapParsed[f];
+          }
+        } catch (gapErr) {
+          console.warn("[adforge:brand-extract] gap-fill pass failed:", gapErr);
+        }
+      }
+
+      setQuickStatus("⑤ Merging metadata + AI results…");
       stageBrain(parsed, fallback, r.url, "url", sourceLabel, deterministic);
     } catch (e: any) {
       setQuickStatus(e?.message ?? "Failed");
