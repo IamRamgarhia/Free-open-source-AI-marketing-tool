@@ -466,11 +466,15 @@ const server = http.createServer(async (req, res) => {
       // capabilities array lets the browser confirm which endpoints this
       // sidecar supports — useful for diagnosing "stale sidecar" issues
       // without having to grep the source.
+      // cwd lets AdForge.bat/AdForge.command distinguish "MY install's
+      // sidecar" from "SOMEONE ELSE'S install on this same port" — needed
+      // for multi-install port routing.
       return json(res, 200, {
         ok: true,
         port: PORT,
+        cwd: PROJECT_ROOT,
         capabilities: ["status", "snapshot", "config", "web/start", "web/stop", "web/restart", "web/rebuild", "diagnostics", "update/check", "update/apply", "update/status", "ingest"],
-        sidecar_version: "2026.05.de6d6df+", // bump this when adding new endpoints
+        sidecar_version: "2026.05.ef96b97+", // bump this when adding new endpoints
       });
     }
 

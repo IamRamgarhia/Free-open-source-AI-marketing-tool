@@ -1,53 +1,24 @@
 @echo off
 REM AdForge desktop launcher (Windows).
 REM
-REM Double-click this file (or the "AdForge" shortcut your installer placed
-REM on your Desktop) to:
-REM   1. Start the AdForge sidecar in the background if it's not already
-REM      running (the sidecar is the tiny Node HTTP server that manages
-REM      the web app + serves the launcher page).
-REM   2. Open the launcher control panel in your default browser at
-REM      http://127.0.0.1:3006/. That page is a normal HTML file with
-REM      Start / Stop / Open buttons - click Start to boot the web app.
+REM Double-click this file to launch AdForge. On every launch we:
+REM   1. Inspect any AdForge sidecar already running on the configured port.
+REM      If it's THIS install's current sidecar  → reuse, open browser.
+REM      If it's THIS install's stale sidecar    → kill, restart on same port.
+REM      If it's ANOTHER install's sidecar       → shift to a free port pair.
+REM      If port is bound by something unrelated → shift to a free port pair.
+REM      If port is free                         → start fresh.
+REM   2. On first run, install deps + write default .env.local + create Desktop shortcut.
+REM   3. Spawn sidecar hidden (PowerShell Start-Process -WindowStyle Hidden).
+REM   4. Wait for /health, open browser to the launcher.
 REM
-REM Uses PowerShell (always present on Win10+) to spawn the sidecar
-REM detached and hidden so no black cmd window stays behind.
+REM Two AdForge installs in different folders never fight over port 3006 —
+REM the second one detects the first and auto-shifts to the next free pair.
 
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
-REM --- Load configured sync port (default 3006) ---
-set "SYNC_PORT=3006"
-if exist .env.local (
-    for /f "tokens=2 delims==" %%a in ('findstr /b "ADFORGE_SYNC_PORT=" .env.local 2^>nul') do set "SYNC_PORT=%%a"
-)
-
-REM --- Already running? Check whether it's CURRENT or STALE ---
-REM We check the /health endpoint's capabilities array: if "ingest" is missing
-REM the running sidecar predates the auto-ingest feature and needs replacement.
-REM Without this check, a stale hidden sidecar keeps responding forever and
-REM the user has no way to kill it (no visible window).
-set "SIDECAR_STATE=none"
-for /f %%S in ('powershell -NoProfile -Command ^
-  "try { $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri 'http://127.0.0.1:!SYNC_PORT!/health';" ^
-  "  $caps = (ConvertFrom-Json $r.Content).capabilities;" ^
-  "  if ($caps -contains 'ingest') { 'current' } else { 'stale' } }" ^
-  "catch { 'none' }" 2^>nul') do set "SIDECAR_STATE=%%S"
-
-if "!SIDECAR_STATE!"=="current" (
-    echo Sidecar already running on :!SYNC_PORT! (current version). Opening browser...
-    start "" "http://127.0.0.1:!SYNC_PORT!/"
-    exit /b 0
-)
-if "!SIDECAR_STATE!"=="stale" (
-    echo Stale sidecar detected on :!SYNC_PORT! - asking it to quit before starting a fresh one...
-    powershell -NoProfile -Command ^
-      "try { Invoke-WebRequest -UseBasicParsing -Method POST -TimeoutSec 3 -Uri 'http://127.0.0.1:!SYNC_PORT!/quit' | Out-Null } catch {}" >nul 2>&1
-    REM Wait a beat for the OS to release the port.
-    powershell -NoProfile -Command "Start-Sleep -Milliseconds 1500" >nul 2>&1
-)
-
-REM --- Sanity: Node installed? ---
+REM --- Sanity: Node ---
 where node >nul 2>&1
 if errorlevel 1 (
     echo.
@@ -58,35 +29,28 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM --- First-run setup is inlined here (no separate install.bat anymore) ---
-
-REM 1. npm install if node_modules is missing
+REM --- First-run setup (inline; no separate install.bat) ---
 if not exist node_modules (
     echo.
     echo ==================================================
-    echo  First run · installing dependencies
+    echo  First run - installing dependencies
     echo ==================================================
-    echo This takes 1-3 minutes. You will only see this once.
-    echo.
     call npm install --no-audit --no-fund
     if errorlevel 1 (
         echo.
-        echo [ERROR] npm install failed. Read the error above and try again.
-        echo.
+        echo [ERROR] npm install failed.
         pause
         exit /b 1
     )
 )
-
-REM 2. Write default .env.local if it doesn't exist (user can change ports later
-REM    from the launcher's Settings card without re-running anything)
 if not exist .env.local (
-    > .env.local echo # AdForge configuration ^(default ports - change in launcher Settings if needed^)
+    > .env.local echo # AdForge configuration ^(default - resolve-ports.cjs may shift if conflicts^)
     >> .env.local echo PORT=3005
     >> .env.local echo ADFORGE_SYNC_PORT=3006
 )
+if not exist data mkdir data
 
-REM 3. Create Desktop shortcut on first run (only if it isn't already there)
+REM Desktop shortcut on first run
 powershell -NoProfile -Command ^
   "$d = [Environment]::GetFolderPath('Desktop');" ^
   "$lnk = Join-Path $d 'AdForge.lnk';" ^
@@ -95,41 +59,82 @@ powershell -NoProfile -Command ^
   "  $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk);" ^
   "  $s.TargetPath = $t; $s.WorkingDirectory = '%CD%';" ^
   "  $s.Description = 'Launch AdForge'; $s.WindowStyle = 7; $s.Save();" ^
-  "  Write-Host '  -> Created Desktop shortcut: ' $lnk" ^
   "}" 2>nul
 
-if not exist data mkdir data
+REM --- Resolve ports (handles multi-install conflicts) ---
+echo Checking for port conflicts...
+set "ACTION="
+set "PORT="
+set "SYNC="
+set "REASON="
+for /f "tokens=1,2,3,4 delims= " %%a in ('node scripts\resolve-ports.cjs 2^>nul') do (
+    for /f "tokens=1,2 delims==" %%x in ("%%a") do if "%%x"=="ACTION" set "ACTION=%%y"
+    for /f "tokens=1,2 delims==" %%x in ("%%b") do if "%%x"=="PORT"   set "PORT=%%y"
+    for /f "tokens=1,2 delims==" %%x in ("%%c") do if "%%x"=="SYNC"   set "SYNC=%%y"
+    for /f "tokens=1,2 delims==" %%x in ("%%d") do if "%%x"=="REASON" set "REASON=%%y"
+)
 
-REM --- Spawn the sidecar detached, hidden, with the right env var ---
-echo Starting AdForge sidecar...
-powershell -NoProfile -Command ^
-  "$env:ADFORGE_SYNC_PORT='!SYNC_PORT!';" ^
-  "Start-Process -FilePath 'node' -ArgumentList 'scripts\local-sync.cjs' -WorkingDirectory (Get-Location) -WindowStyle Hidden"
-if errorlevel 1 (
-    echo [ERROR] Failed to launch the sidecar. Run scripts\start.bat in a visible window to see why.
+if "!ACTION!"=="" (
+    echo [ERROR] Port resolver failed to run.
+    pause
+    exit /b 1
+)
+if "!ACTION!"=="error" (
+    echo [ERROR] Port resolver: !REASON!
     pause
     exit /b 1
 )
 
-REM --- Wait for /health to come up, then open the browser ---
+if "!ACTION!"=="reuse" (
+    echo Sidecar already running on :!SYNC! for this install. Opening browser...
+    start "" "http://127.0.0.1:!SYNC!/"
+    exit /b 0
+)
+
+if "!ACTION!"=="restart_stale" (
+    echo Stale sidecar on :!SYNC! - asking it to quit before starting fresh...
+    powershell -NoProfile -Command ^
+      "try { Invoke-WebRequest -UseBasicParsing -Method POST -TimeoutSec 3 -Uri 'http://127.0.0.1:!SYNC!/quit' | Out-Null } catch {}" >nul 2>&1
+    powershell -NoProfile -Command "Start-Sleep -Milliseconds 1500" >nul 2>&1
+)
+
+if "!ACTION!"=="shifted" (
+    echo.
+    echo  Default ports were taken by another AdForge install or process.
+    echo  This install will use:  web=!PORT!  sync=!SYNC!
+    echo  Saved to .env.local so future launches reuse these.
+    echo.
+)
+
+REM --- Spawn sidecar detached + hidden ---
+echo Starting AdForge sidecar on :!SYNC!...
+powershell -NoProfile -Command ^
+  "$env:ADFORGE_SYNC_PORT='!SYNC!'; $env:PORT='!PORT!';" ^
+  "Start-Process -FilePath 'node' -ArgumentList 'scripts\local-sync.cjs' -WorkingDirectory (Get-Location) -WindowStyle Hidden"
+if errorlevel 1 (
+    echo [ERROR] Failed to launch the sidecar. Try scripts\start.bat for a visible log.
+    pause
+    exit /b 1
+)
+
+REM --- Wait for /health on the resolved port ---
 set /a TRIES=0
 :wait
 set /a TRIES+=1
 powershell -NoProfile -Command ^
-  "try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Uri 'http://127.0.0.1:!SYNC_PORT!/health' | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
+  "try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Uri 'http://127.0.0.1:!SYNC!/health' | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
 if not errorlevel 1 goto :ready
 if !TRIES! GEQ 30 goto :fail
-REM ~750ms sleep between probes
 powershell -NoProfile -Command "Start-Sleep -Milliseconds 750" >nul 2>&1
 goto :wait
 
 :ready
-start "" "http://127.0.0.1:!SYNC_PORT!/"
+start "" "http://127.0.0.1:!SYNC!/"
 exit /b 0
 
 :fail
 echo.
-echo [ERROR] Sidecar did not respond within 30 seconds.
+echo [ERROR] Sidecar did not respond on :!SYNC! within 30 seconds.
 echo   Run scripts\start.bat in a normal window to see the actual log output.
 echo.
 pause
