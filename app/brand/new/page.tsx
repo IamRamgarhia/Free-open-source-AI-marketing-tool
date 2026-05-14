@@ -1,16 +1,16 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Plus, Globe, Loader2, Search, Check, X, AlertTriangle, Edit3, ArrowLeft } from "lucide-react";
+import { Plus, Globe, Loader2, Search, Check, X, AlertTriangle, Edit3, ArrowLeft, StopCircle, Image as ImageIcon, RefreshCw } from "lucide-react";
 import { ApiKeyGate } from "@/components/ApiKeyGate";
 import { PageHeader } from "@/components/PageHeader";
 import { BrandBrainForm } from "@/components/BrandBrainForm";
 import { saveBrain } from "@/lib/storage";
 import { emptyBrandBrain, type BrandBrain } from "@/lib/brand-brain";
-import { setActiveBrainId, addUsage } from "@/lib/settings";
-import { ingestUrl, ingestPasted } from "@/lib/url-ingest";
+import { setActiveBrainId, addUsage, getActiveProviderId, getModel } from "@/lib/settings";
+import { ingestUrl, ingestPasted, ingestSubpages, looksLikeUrl, detectSocial } from "@/lib/url-ingest";
 import { INDUSTRY_TEMPLATES } from "@/lib/industry-templates";
 import { llmCall, estimateCostUsd, tryParseJson } from "@/lib/llm";
 import { buildBrandExtractionPrompt } from "@/lib/prompts/brand-extraction";
@@ -18,6 +18,10 @@ import { buildBrandGapFillPrompt } from "@/lib/prompts/brand-gap-fill";
 import { buildSearchAugmentedPrompt } from "@/lib/prompts/brand-search-augmented";
 import { deterministicFillFromMetadata } from "@/lib/deterministic-brand-fill";
 import { applyIndustryFallback } from "@/lib/industry-fallback";
+import { saveDraft, loadDraft, clearDraft } from "@/lib/brand-draft";
+import { getProvider } from "@/lib/providers";
+import { providerSupportsVision, fileToImagePart } from "@/lib/providers/vision";
+import type { ContentPart, ImagePart } from "@/lib/providers/types";
 
 // Fields the gap-fill second pass is allowed to attempt. Excludes deterministic
 // fields (business_name, industry, etc.) and the no-fabrication fields
@@ -86,6 +90,33 @@ export default function BrandOnboardingPage() {
   );
 }
 
+/** Rough cost estimate per extraction (USD) for the active provider+model.
+ *  Used to show "≈ $0.02" under the Extract buttons. Based on:
+ *    Pass 1: ~6k in + ~2k out
+ *    Pass 2 (gap-fill): ~3k in + ~1k out
+ *    Pass 3 (auto-search): ~8k in + ~2k out
+ *  Conservative envelope — actual cost varies with content length. */
+function estimateExtractionCostUsd(lightMode: boolean): number {
+  try {
+    const pid = getActiveProviderId();
+    if (!pid) return 0;
+    const provider = getProvider(pid);
+    if (!provider) return 0;
+    const modelId = getModel();
+    const model = provider.models?.find((m) => m.id === modelId) ?? provider.models?.[0];
+    if (!model?.pricing) return 0;
+    const inP = model.pricing.input_per_million_usd ?? 0;
+    const outP = model.pricing.output_per_million_usd ?? 0;
+    if (lightMode) {
+      // Single pass only — pass 1 budget.
+      return (6000 * inP + 2000 * outP) / 1_000_000;
+    }
+    return (17000 * inP + 5000 * outP) / 1_000_000;
+  } catch {
+    return 0;
+  }
+}
+
 function Inner() {
   const router = useRouter();
   const [editing, setEditing] = useState<BrandBrain | null>(null);
@@ -96,8 +127,23 @@ function Inner() {
   // The ref is checked + set synchronously at the top of each async entry point.
   // (Audit finding #6.)
   const busyRef = useRef(false);
+  // AbortController for the in-flight extraction. Cancel button calls .abort()
+  // and the URL/Paste/Google handlers pass .signal down to every llmCall + ingestUrl.
+  const abortRef = useRef<AbortController | null>(null);
+  const [lightMode, setLightMode] = useState(false);
+  const [resumeDraft, setResumeDraft] = useState<ReturnType<typeof loadDraft>>(null);
+  const [visionFile, setVisionFile] = useState<File | null>(null);
   const [quickStatus, setQuickStatus] = useState<string | null>(null);
   const [showPaste, setShowPaste] = useState(false);
+  const costPreview = estimateExtractionCostUsd(lightMode);
+
+  // Hydrate draft on mount — if the user crashed/refreshed mid-extraction, offer
+  // to resume from the staged result.
+  useEffect(() => {
+    const d = loadDraft();
+    if (d) setResumeDraft(d);
+  }, []);
+
   const [pasted, setPasted] = useState("");
   const [googleQuery, setGoogleQuery] = useState("");
   const [pendingExtraction, setPendingExtraction] = useState<{
@@ -105,6 +151,25 @@ function Inner() {
     source: "url" | "paste" | "google";
     sourceLabel: string;
   } | null>(null);
+
+  function stopExtraction() {
+    abortRef.current?.abort();
+  }
+
+  function dismissResumeDraft() {
+    clearDraft();
+    setResumeDraft(null);
+  }
+
+  function resumeFromDraft() {
+    if (!resumeDraft) return;
+    setPendingExtraction({
+      brain: resumeDraft.brain,
+      source: resumeDraft.source === "vision" ? "url" : resumeDraft.source,
+      sourceLabel: resumeDraft.sourceLabel,
+    });
+    setResumeDraft(null);
+  }
 
   function stageBrain(
     parsed: any,
@@ -154,6 +219,9 @@ function Inner() {
 
     setPendingExtraction({ brain: fallbackBrain, source, sourceLabel });
     setQuickStatus(null);
+    // Persist as draft so a refresh / crash before user clicks "Save & activate"
+    // doesn't waste the AI cost.
+    saveDraft({ brain: fallbackBrain, source, sourceLabel, saved_at: Date.now() });
   }
 
   async function commitPendingExtraction() {
@@ -165,6 +233,7 @@ function Inner() {
     try {
       await saveBrain(pendingExtraction.brain);
       setActiveBrainId(pendingExtraction.brain.id);
+      clearDraft();
       window.dispatchEvent(new Event("ados:brains-changed"));
       // After save, route back to the clients list so the user sees the new
       // brand active in context with their other clients.
@@ -184,24 +253,62 @@ function Inner() {
 
   function discardPendingExtraction() {
     setPendingExtraction(null);
+    clearDraft();
     setQuickStatus(null);
   }
 
   async function quickAddFromUrl() {
     if (!quickUrl.trim()) return;
     if (busyRef.current) return;
+
+    // SMART ROUTING (Tier 1.1): if the input doesn't look like a URL (no TLD,
+    // has spaces, etc.), treat it as a business name and reroute to Google
+    // search. Same with social-only URLs that block scrapers.
+    const trimmed = quickUrl.trim();
+    if (!looksLikeUrl(trimmed)) {
+      setGoogleQuery(trimmed);
+      setQuickStatus(`That doesn't look like a domain — searching Google for "${trimmed}" instead…`);
+      // Run the Google flow with the input as the query.
+      return quickAddFromGoogleInternal(trimmed);
+    }
+    const social = detectSocial(trimmed);
+    if (social) {
+      setGoogleQuery(trimmed);
+      setQuickStatus(`${social.platform} blocks scrapers — searching Google for the brand instead…`);
+      return quickAddFromGoogleInternal(trimmed);
+    }
+
     busyRef.current = true;
+    abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
+    // 90s timeout per call — releases the abort if a single call hangs.
+    const timeout = setTimeout(() => abortRef.current?.abort(), 90_000);
     setQuickBusy(true);
     setQuickStatus("① Fetching page content…");
     setShowPaste(false);
     try {
-      const r = await ingestUrl(quickUrl);
+      const r = await ingestUrl(quickUrl, signal);
       if (!r.ok) {
         setQuickStatus(r.message);
         if (r.recoverable) setShowPaste(true);
         return;
       }
-      setQuickStatus("② Reading page metadata (title, OG tags, social links, schema)…");
+
+      // Multi-page ingest (Tier 1.3): pull /about, /pricing, /services, /contact
+      // in parallel. Most brand inference signal lives on subpages, not home.
+      setQuickStatus("② Reading homepage + subpages…");
+      let aggregatedContent = r.content;
+      try {
+        const subpages = await ingestSubpages(r, signal, 3);
+        if (subpages.pages.length) {
+          aggregatedContent = r.content + subpages.extraContent;
+          dlog("[adforge:brand-extract] subpages-ingested:", subpages.pages);
+        }
+      } catch (subErr) {
+        dlog("[adforge:brand-extract] subpage-ingest failed:", subErr);
+      }
+
+      setQuickStatus("③ Reading page metadata (title, OG tags, social links, schema)…");
       const deterministic = deterministicFillFromMetadata(r.metadata, r.url);
       dlog("[adforge:brand-extract] deterministic fill:", deterministic);
       dlog("[adforge:brand-extract] raw metadata:", r.metadata);
@@ -210,10 +317,10 @@ function Inner() {
         r.source === "allorigins" ? "AllOrigins fallback" :
         "Jina Reader"
       })`;
-      setQuickStatus("③ Asking AI to fill the inference-heavy fields (tone, audience, pain points, products)…");
+      setQuickStatus("④ Asking AI to fill the inference-heavy fields (tone, audience, pain points, products)…");
       const res = await llmCall({
         messages: [{ role: "user", content: buildBrandExtractionPrompt({
-          website_content: r.content,
+          website_content: aggregatedContent,
           description: `Brand at ${r.url}`,
           audience_notes: "",
           reviews: "",
@@ -227,6 +334,7 @@ function Inner() {
         }) }],
         maxTokens: 3000,
         temperature: 0.7,
+        signal,
       });
       dlog("[adforge:brand-extract] raw AI response text:", res.text);
       const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
@@ -250,8 +358,9 @@ function Inner() {
       // we must regenerate both together so the indices line up. (Audit finding #63.)
       if (missing.includes("objections") && !missing.includes("objection_handling")) missing.push("objection_handling");
       if (missing.includes("objection_handling") && !missing.includes("objections")) missing.push("objections");
-      if (missing.length) {
-        setQuickStatus(`④ Filling gaps — ${missing.length} field${missing.length === 1 ? "" : "s"} still empty. Re-asking AI to infer from content…`);
+      // Light mode skips both gap-fill + auto-search to save cost; pass 1 + industry fallback only.
+      if (missing.length && !lightMode) {
+        setQuickStatus(`⑤ Filling gaps — ${missing.length} field${missing.length === 1 ? "" : "s"} still empty. Re-asking AI to infer from content…`);
         try {
           const gapRes = await llmCall({
             messages: [{ role: "user", content: buildBrandGapFillPrompt({
@@ -259,11 +368,12 @@ function Inner() {
               industry: deterministic.industry || parsed.industry,
               niche: deterministic.niche || parsed.niche,
               usp: deterministic.usp || parsed.usp,
-              website_content: r.content,
+              website_content: aggregatedContent,
               missing_fields: missing as unknown as string[],
             }) }],
             maxTokens: 2000,
             temperature: 0.8,
+            signal,
           });
           dlog("[adforge:brand-extract] raw AI response text (gap-fill):", gapRes.text);
           const gapCost = estimateCostUsd(gapRes.providerId, gapRes.modelId, gapRes.usage);
@@ -298,17 +408,17 @@ function Inner() {
       // left something empty AND we have a usable brand name to search for.
       const stillMissing = GAP_FILL_FIELDS.filter((f) => isEmptyField(parsed[f]));
       const searchableName = deterministic.business_name || parsed.business_name;
-      if (stillMissing.length && searchableName && searchableName.length > 2) {
+      if (stillMissing.length && searchableName && searchableName.length > 2 && !lightMode) {
         // Build a focused query: brand name + industry keyword to disambiguate
         // and bias toward reviews / mentions.
         const industryHint = (deterministic.industry || parsed.industry || "").split(/[|·,]/)[0].trim();
         const baseQuery = industryHint
           ? `${searchableName} ${industryHint} reviews competitors customers`
           : `${searchableName} reviews competitors`;
-        setQuickStatus(`⑤ Auto-searching Google for "${searchableName}" to fill ${stillMissing.length} remaining gap${stillMissing.length === 1 ? "" : "s"}…`);
+        setQuickStatus(`⑥ Auto-searching Google for "${searchableName}" to fill ${stillMissing.length} remaining gap${stillMissing.length === 1 ? "" : "s"}…`);
         try {
           const searchUrl = `https://s.jina.ai/${encodeURIComponent(baseQuery)}`;
-          const searchRes = await ingestUrl(searchUrl);
+          const searchRes = await ingestUrl(searchUrl, signal);
           if (searchRes.ok && searchRes.content && searchRes.content.length > 500) {
             dlog("[adforge:brand-extract] auto-search content (length):", searchRes.content.length);
             const augRes = await llmCall({
@@ -322,6 +432,7 @@ function Inner() {
               }) }],
               maxTokens: 2500,
               temperature: 0.7,
+              signal,
             });
             dlog("[adforge:brand-extract] raw AI response text (search-augmented):", augRes.text);
             const augCost = estimateCostUsd(augRes.providerId, augRes.modelId, augRes.usage);
@@ -349,11 +460,17 @@ function Inner() {
         }
       }
 
-      setQuickStatus("⑥ Merging metadata + AI results…");
+      setQuickStatus("⑦ Merging metadata + AI results…");
       stageBrain(parsed, fallback, r.url, "url", sourceLabel, deterministic);
     } catch (e: any) {
-      setQuickStatus(e?.message ?? "Failed");
+      if (e?.name === "AbortError") {
+        setQuickStatus("Extraction cancelled. Nothing was saved.");
+      } else {
+        setQuickStatus(e?.message ?? "Failed");
+      }
     } finally {
+      clearTimeout(timeout);
+      abortRef.current = null;
       setQuickBusy(false);
       busyRef.current = false;
     }
@@ -363,6 +480,9 @@ function Inner() {
     if (!pasted.trim()) return;
     if (busyRef.current) return;
     busyRef.current = true;
+    abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
+    const timeout = setTimeout(() => abortRef.current?.abort(), 90_000);
     setQuickBusy(true);
     setQuickStatus("① Asking AI to extract brand intelligence from pasted content…");
     try {
@@ -375,6 +495,7 @@ function Inner() {
         messages: [{ role: "user", content: buildBrandExtractionPrompt({ website_content: r.content, description: `Brand pasted from ${quickUrl || "manual entry"}`, audience_notes: "", reviews: "" }) }],
         maxTokens: 3000,
         temperature: 0.4,
+        signal,
       });
       dlog("[adforge:brand-extract] raw AI response text (paste):", res.text);
       const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
@@ -389,31 +510,99 @@ function Inner() {
       const fallbackName = quickUrl ? (() => { try { return new URL(/^https?:\/\//i.test(quickUrl) ? quickUrl : `https://${quickUrl}`).hostname.replace(/^www\./, ""); } catch { return "My Brand"; } })() : "My Brand";
       stageBrain(parsed, fallbackName, quickUrl, "paste", `Pasted content${quickUrl ? ` from ${quickUrl}` : ""}`);
     } catch (e: any) {
-      setQuickStatus(e?.message ?? "Extraction failed");
+      if (e?.name === "AbortError") setQuickStatus("Extraction cancelled. Nothing was saved.");
+      else setQuickStatus(e?.message ?? "Extraction failed");
     } finally {
+      clearTimeout(timeout);
+      abortRef.current = null;
       setQuickBusy(false);
       busyRef.current = false;
     }
   }
 
-  async function quickAddFromGoogle() {
-    if (!googleQuery.trim()) return;
+  // Vision-based extraction (Tier 3.12): user drops a homepage screenshot,
+  // and a vision-capable AI reads it directly. Bypasses ingest pipeline.
+  async function quickAddFromVision() {
+    if (!visionFile) return;
+    if (busyRef.current) return;
+    const pid = getActiveProviderId();
+    const model = getModel();
+    if (!pid || !providerSupportsVision(pid as any, model)) {
+      setQuickStatus("Active provider doesn't support vision. Switch to Claude / GPT / Gemini in Settings, or use Method 1.");
+      return;
+    }
+    busyRef.current = true;
+    abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
+    const timeout = setTimeout(() => abortRef.current?.abort(), 90_000);
+    setQuickBusy(true);
+    setQuickStatus("① Reading screenshot…");
+    try {
+      const imagePart: ImagePart = await fileToImagePart(visionFile);
+      const content: ContentPart[] = [
+        imagePart,
+        {
+          type: "text",
+          text: buildBrandExtractionPrompt({
+            website_content: "(see attached homepage screenshot — read it as the page content)",
+            description: "Brand homepage screenshot",
+            audience_notes: "",
+            reviews: "",
+          }),
+        },
+      ];
+      setQuickStatus("② Asking vision model to extract brand from screenshot…");
+      const res = await llmCall({
+        messages: [{ role: "user", content }],
+        maxTokens: 3000,
+        temperature: 0.7,
+        signal,
+      });
+      dlog("[adforge:brand-extract] raw AI response text (vision):", res.text);
+      const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
+      addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+      window.dispatchEvent(new Event("ados:usage"));
+      const parsed = tryParseJson<any>(res.text) ?? {};
+      if (!parsed.business_name && !Object.keys(parsed).length) {
+        setQuickStatus("Vision model returned no usable JSON. Try Method 1 / 4 instead.");
+        return;
+      }
+      stageBrain(parsed, "My Brand", "", "google", `Vision · ${visionFile.name}`);
+    } catch (e: any) {
+      if (e?.name === "AbortError") setQuickStatus("Cancelled. Nothing was saved.");
+      else setQuickStatus(e?.message ?? "Vision extraction failed");
+    } finally {
+      clearTimeout(timeout);
+      abortRef.current = null;
+      setQuickBusy(false);
+      busyRef.current = false;
+    }
+  }
+
+  // Google ingest with abort/timeout. Used both by the explicit Method 2 button
+  // and by the auto-route fallback from Method 1.
+  async function quickAddFromGoogleInternal(query: string) {
+    if (!query.trim()) return;
     if (busyRef.current) return;
     busyRef.current = true;
+    abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
+    const timeout = setTimeout(() => abortRef.current?.abort(), 90_000);
     setQuickBusy(true);
-    setQuickStatus(`① Searching Google for "${googleQuery}"…`);
+    setQuickStatus(`① Searching Google for "${query}"…`);
     try {
-      const searchUrl = `https://s.jina.ai/${encodeURIComponent(googleQuery.trim())}`;
-      const r = await ingestUrl(searchUrl);
+      const searchUrl = `https://s.jina.ai/${encodeURIComponent(query.trim())}`;
+      const r = await ingestUrl(searchUrl, signal);
       if (!r.ok) {
         setQuickStatus(r.message);
         return;
       }
       setQuickStatus("② Asking AI to extract brand intelligence from search results…");
       const res = await llmCall({
-        messages: [{ role: "user", content: buildBrandExtractionPrompt({ website_content: r.content, description: `Brand found via Google search: ${googleQuery}`, audience_notes: "", reviews: "" }) }],
+        messages: [{ role: "user", content: buildBrandExtractionPrompt({ website_content: r.content, description: `Brand found via Google search: ${query}`, audience_notes: "", reviews: "" }) }],
         maxTokens: 3000,
         temperature: 0.4,
+        signal,
       });
       dlog("[adforge:brand-extract] raw AI response text (google):", res.text);
       const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
@@ -425,13 +614,20 @@ function Inner() {
         setQuickStatus("AI returned no usable JSON from search results. Try a more specific query or fall back to Method 3 / 4.");
         return;
       }
-      stageBrain(parsed, googleQuery, "", "google", `Google search · "${googleQuery}"`);
+      stageBrain(parsed, query, "", "google", `Google search · "${query}"`);
     } catch (e: any) {
-      setQuickStatus(e?.message ?? "Google search ingest failed");
+      if (e?.name === "AbortError") setQuickStatus("Search cancelled. Nothing was saved.");
+      else setQuickStatus(e?.message ?? "Google search ingest failed");
     } finally {
+      clearTimeout(timeout);
+      abortRef.current = null;
       setQuickBusy(false);
       busyRef.current = false;
     }
+  }
+
+  function quickAddFromGoogle() {
+    return quickAddFromGoogleInternal(googleQuery);
   }
 
   // Editing flow: when the user clicks "Edit before saving" on the review
@@ -467,6 +663,24 @@ function Inner() {
         }
       />
 
+      {/* Draft-resume banner — shown when the user crashed/refreshed mid-extraction.
+          Lets them recover the staged result without paying for another AI run. */}
+      {resumeDraft && !pendingExtraction ? (
+        <div className="border-2 border-info bg-info/[0.06] p-4 mb-4 flex items-start gap-3">
+          <RefreshCw size={14} className="text-info shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <div className="text-[12px] font-semibold uppercase tracking-wider text-info mb-1">Unfinished extraction</div>
+            <p className="text-[12px] text-ink leading-relaxed">
+              You started an extraction for <span className="font-mono text-ink">{resumeDraft.brain.business_name}</span> ({new Date(resumeDraft.saved_at).toLocaleString()}). Resume the cross-check, or discard.
+            </p>
+            <div className="flex gap-2 mt-2">
+              <button onClick={resumeFromDraft} className="btn-primary"><RefreshCw size={11} /> Resume</button>
+              <button onClick={dismissResumeDraft} className="btn-ghost"><X size={11} /> Discard</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {/* Review panel sits at the top once an extraction has staged — that's
           the cross-check moment users were doing manually before. */}
       {pendingExtraction ? (
@@ -492,7 +706,7 @@ function Inner() {
             <div className="flex flex-wrap gap-2">
               <input
                 className="input-base flex-1 min-w-[240px]"
-                placeholder="acme.com / clientwebsite.com"
+                placeholder="acme.com / clientwebsite.com OR business name"
                 value={quickUrl}
                 onChange={(e) => setQuickUrl(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") quickAddFromUrl(); }}
@@ -500,8 +714,25 @@ function Inner() {
               />
               <button onClick={quickAddFromUrl} disabled={quickBusy || !quickUrl.trim()} className="btn-primary">
                 {quickBusy ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
-                {quickBusy ? "ingesting" : "extract"}
+                {quickBusy ? "extracting" : "extract"}
               </button>
+              {quickBusy ? (
+                <button onClick={stopExtraction} className="btn-ghost" title="Cancel the extraction (no charge for partial work)">
+                  <StopCircle size={11} /> stop
+                </button>
+              ) : null}
+            </div>
+            {/* Cost preview + light-mode toggle */}
+            <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
+              <label className="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-ui-wide text-ink-faint cursor-pointer">
+                <input type="checkbox" checked={lightMode} onChange={(e) => setLightMode(e.target.checked)} disabled={quickBusy} />
+                light mode — single AI call, ~70% cheaper
+              </label>
+              {costPreview > 0 ? (
+                <span className="text-[11px] font-mono uppercase tracking-ui-wide text-ink-faint tabular">
+                  ≈ ${costPreview.toFixed(4)} {lightMode ? "(light)" : "(full)"}
+                </span>
+              ) : null}
             </div>
             {quickStatus ? (
               <div className={`mt-2 border px-3 py-2 ${quickBusy ? "border-info/40 bg-info/[0.06]" : "border-neg/40 bg-neg/[0.05]"}`}>
@@ -538,8 +769,11 @@ function Inner() {
                     {quickBusy ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
                     extract from paste
                   </button>
+                  {quickBusy ? (
+                    <button onClick={stopExtraction} className="btn-ghost"><StopCircle size={11} /> stop</button>
+                  ) : null}
                   <button onClick={() => { setShowPaste(false); setPasted(""); }} disabled={quickBusy} className="btn-ghost">
-                    cancel
+                    close
                   </button>
                 </div>
               </div>
@@ -577,6 +811,40 @@ function Inner() {
                 {quickBusy ? <Loader2 size={11} className="animate-spin" /> : <Search size={11} />}
                 {quickBusy ? "searching" : "search & extract"}
               </button>
+              {quickBusy ? (
+                <button onClick={stopExtraction} className="btn-ghost" title="Cancel">
+                  <StopCircle size={11} /> stop
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          {/* Method 2.5 — vision: drop a homepage screenshot */}
+          <div className="border border-info/20 bg-info/[0.03] p-4 mb-4">
+            <div className="flex items-center gap-2 mb-2">
+              <ImageIcon size={14} className="text-info" />
+              <span className="text-[12px] font-semibold uppercase tracking-wider text-info">Method 2.5 · drop a homepage screenshot</span>
+            </div>
+            <p className="text-[12px] text-ink-muted mb-2 leading-relaxed">
+              Vision-capable providers (Claude / GPT / Gemini) read the screenshot directly — sometimes catches more than stripped HTML. Open the homepage, screenshot it, drop the PNG here.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => setVisionFile(e.target.files?.[0] ?? null)}
+                disabled={quickBusy}
+                className="text-[11px] font-mono text-ink-muted"
+              />
+              <button onClick={quickAddFromVision} disabled={quickBusy || !visionFile} className="btn-primary">
+                {quickBusy ? <Loader2 size={11} className="animate-spin" /> : <ImageIcon size={11} />}
+                {quickBusy ? "reading…" : "extract from image"}
+              </button>
+              {quickBusy ? (
+                <button onClick={stopExtraction} className="btn-ghost" title="Cancel">
+                  <StopCircle size={11} /> stop
+                </button>
+              ) : null}
             </div>
           </div>
 
@@ -697,44 +965,10 @@ function ExtractionReview({
         </div>
       ) : null}
 
-      <div className="space-y-1">
-        {fields.map((f) => {
-          const filled = isFilled(f.value);
-          const display = Array.isArray(f.value) ? f.value.join(" · ") : (f.value ?? "");
-          return (
-            <div
-              key={f.label}
-              className={`flex items-start gap-2 px-2 py-1.5 border-l-2 ${
-                filled ? "border-pos/60" : f.weight === "core" ? "border-neg/60" : "border-base-700"
-              } bg-base-900/30`}
-            >
-              <span className="shrink-0 mt-0.5">
-                {filled ? <Check size={11} className="text-pos" /> : f.weight === "core" ? <X size={11} className="text-neg" /> : <span className="block h-[11px] w-[11px] border border-base-600 rounded-full" />}
-              </span>
-              <div className="flex-1 min-w-0">
-                <div className="text-[10px] font-mono uppercase tracking-ui-wide text-ink-faint">
-                  {f.label}
-                  {f.weight === "core" ? <span className="text-neg ml-1">*</span> : null}
-                </div>
-                <div className={`text-[13px] mt-0.5 ${filled ? "text-ink" : "text-ink-subtle italic"}`}>
-                  {filled ? display : "(blank — AI couldn't find this)"}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-        {socials.length > 0 ? (
-          <div className="flex items-start gap-2 px-2 py-1.5 border-l-2 border-pos/60 bg-base-900/30">
-            <Check size={11} className="text-pos shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <div className="text-[10px] font-mono uppercase tracking-ui-wide text-ink-faint">Social handles found</div>
-              <div className="text-[12px] text-ink mt-0.5">
-                {socials.map(([platform, handle]) => `${platform}: ${handle}`).join(" · ")}
-              </div>
-            </div>
-          </div>
-        ) : null}
-      </div>
+      {/* Two-section UI: core 6 fields always shown; everything else collapsed
+          under an accordion. Accordion auto-expands when something inside is
+          still empty so the user sees the gap. (Tier 2.6 onboarding polish.) */}
+      <CrossCheckFields fields={fields} socials={socials} />
 
       <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-base-700">
         <button onClick={onSave} className="btn-primary">
@@ -755,5 +989,73 @@ function ExtractionReview({
         </button>
       </div>
     </div>
+  );
+}
+
+function CrossCheckFields({ fields, socials }: { fields: Array<{ label: string; value: string | string[] | undefined; weight: "core" | "important" | "extra" }>; socials: Array<[string, string]> }) {
+  const isFilled = (v: string | string[] | undefined) => (Array.isArray(v) ? v.length > 0 : !!(v && v.trim()));
+  const coreFields = fields.filter((f) => f.weight === "core");
+  const extraFields = fields.filter((f) => f.weight !== "core");
+  const extraHasGap = extraFields.some((f) => !isFilled(f.value));
+  const [expanded, setExpanded] = useState(extraHasGap);
+
+  const renderRow = (f: { label: string; value: string | string[] | undefined; weight: "core" | "important" | "extra" }) => {
+    const filled = isFilled(f.value);
+    const display = Array.isArray(f.value) ? f.value.join(" · ") : (f.value ?? "");
+    return (
+      <div
+        key={f.label}
+        className={`flex items-start gap-2 px-2 py-1.5 border-l-2 ${
+          filled ? "border-pos/60" : f.weight === "core" ? "border-neg/60" : "border-base-700"
+        } bg-base-900/30`}
+      >
+        <span className="shrink-0 mt-0.5">
+          {filled ? <Check size={11} className="text-pos" /> : f.weight === "core" ? <X size={11} className="text-neg" /> : <span className="block h-[11px] w-[11px] border border-base-600 rounded-full" />}
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="text-[10px] font-mono uppercase tracking-ui-wide text-ink-faint">
+            {f.label}
+            {f.weight === "core" ? <span className="text-neg ml-1">*</span> : null}
+          </div>
+          <div className={`text-[13px] mt-0.5 ${filled ? "text-ink" : "text-ink-subtle italic"}`}>
+            {filled ? display : "(blank — AI couldn't find this)"}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <>
+      <div className="text-[10px] font-mono uppercase tracking-ui-mega text-ink-faint mb-2">Essentials (required)</div>
+      <div className="space-y-1 mb-3">
+        {coreFields.map(renderRow)}
+      </div>
+
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-2 text-[11px] font-mono uppercase tracking-ui-wide text-info hover:text-ink transition mb-2"
+      >
+        {expanded ? "▾" : "▸"} {expanded ? "Hide" : "Show"} {extraFields.length} more fields
+        {!expanded && extraHasGap ? <span className="text-neg">· some empty</span> : null}
+      </button>
+
+      {expanded ? (
+        <div className="space-y-1">
+          {extraFields.map(renderRow)}
+          {socials.length > 0 ? (
+            <div className="flex items-start gap-2 px-2 py-1.5 border-l-2 border-pos/60 bg-base-900/30">
+              <Check size={11} className="text-pos shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <div className="text-[10px] font-mono uppercase tracking-ui-wide text-ink-faint">Social handles found</div>
+                <div className="text-[12px] text-ink mt-0.5">
+                  {socials.map(([platform, handle]) => `${platform}: ${handle}`).join(" · ")}
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </>
   );
 }

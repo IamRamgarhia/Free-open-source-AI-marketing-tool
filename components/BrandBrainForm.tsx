@@ -8,7 +8,9 @@ import { saveBrain } from "@/lib/storage";
 import { setActiveBrainId, addUsage } from "@/lib/settings";
 import { llmCall, estimateCostUsd, tryParseJson } from "@/lib/llm";
 import { buildBrandExtractionPrompt } from "@/lib/prompts/brand-extraction";
-import { ingestUrl, detectSocial } from "@/lib/url-ingest";
+import { ingestUrl, ingestSubpages, detectSocial } from "@/lib/url-ingest";
+import { applyIndustryFallback } from "@/lib/industry-fallback";
+import { deterministicFillFromMetadata } from "@/lib/deterministic-brand-fill";
 
 type ListField =
   | "personality_traits"
@@ -30,6 +32,37 @@ type ListField =
 
 const joinList = (arr: string[]) => arr.join("\n");
 const splitList = (s: string) => s.split("\n").map((x) => x.trim()).filter(Boolean);
+
+/** Merge AI-extracted values + deterministic-metadata values into the user's
+ *  brain, but ONLY for fields they haven't filled in. Identity fields
+ *  (business_name, website_url, social_links) are user-controlled. */
+function mergeFillEmpty(
+  current: BrandBrain,
+  ai: Partial<BrandBrain>,
+  ctx: { url: string; deterministic: Partial<BrandBrain> },
+): BrandBrain {
+  const out: any = { ...current };
+  const isEmpty = (v: unknown) => v == null || (Array.isArray(v) && v.length === 0) || (typeof v === "string" && !v.trim());
+  // AI first (lower precedence)
+  for (const [k, v] of Object.entries(ai)) {
+    if (k === "id" || k === "created_at" || k === "updated_at") continue;
+    if (k === "business_name" || k === "website_url" || k === "favicon_url") continue;
+    if (isEmpty(out[k]) && !isEmpty(v)) out[k] = v;
+  }
+  // Deterministic last (higher precedence — metadata wins)
+  for (const [k, v] of Object.entries(ctx.deterministic)) {
+    if (k === "id" || k === "created_at" || k === "updated_at") continue;
+    if (k === "social_links" && v && typeof v === "object") {
+      out.social_links = { ...(out.social_links ?? {}), ...(v as Record<string, string>) };
+      continue;
+    }
+    if (isEmpty(out[k]) && !isEmpty(v)) out[k] = v;
+  }
+  if (!out.business_name && ai.business_name) out.business_name = ai.business_name;
+  if (!out.name) out.name = out.business_name;
+  out.website_url = ctx.url || out.website_url;
+  return out as BrandBrain;
+}
 
 interface Props {
   initial?: BrandBrain;
@@ -150,18 +183,73 @@ export function BrandBrainForm({ initial }: Props) {
       window.dispatchEvent(new Event("ados:usage"));
       const parsed = tryParseJson<Partial<BrandBrain>>(res.text);
       if (parsed) {
-        setBrain((b) => ({
-          ...b,
-          ...parsed,
-          name: b.name || parsed.business_name || "",
-          website_url: url,
-        } as BrandBrain));
+        // Fill-only-empty merge: AI values only overwrite fields the user
+        // hasn't filled in. Identity fields (business_name, website_url) are
+        // user-controlled and never overwritten.
+        setBrain((b) => mergeFillEmpty(b, parsed, { url, deterministic: deterministicFillFromMetadata(r.metadata, r.url) }));
       }
     } catch (e: any) {
       setError(e?.message ?? "URL ingest failed");
     } finally {
       setExtracting(false);
     }
+  }
+
+  /** "Fill empty with AI" — re-ingests the brand's saved website_url, runs the
+   *  AI extraction, and fills ONLY the fields the user has left blank. Safe
+   *  to click on an in-progress edit without losing manual changes. */
+  async function fillEmptyWithAi() {
+    setError(null);
+    const url = (brain.website_url || "").trim();
+    if (!url) {
+      setError("Enter a website URL above first, then click 'Fill empty with AI'.");
+      return;
+    }
+    setExtracting(true);
+    try {
+      const r = await ingestUrl(url);
+      if (!r.ok) { setError(r.message); return; }
+      // Pull subpages too — much richer signal.
+      let content = r.content;
+      try {
+        const sub = await ingestSubpages(r, undefined, 3);
+        if (sub.pages.length) content = r.content + sub.extraContent;
+      } catch {}
+      const det = deterministicFillFromMetadata(r.metadata, r.url);
+      const prompt = buildBrandExtractionPrompt({
+        website_content: content,
+        description: `Brand at ${url}`,
+        audience_notes: "",
+        reviews: "",
+        metadata: r.metadata,
+        prefilled: { business_name: brain.business_name, industry: brain.industry, niche: brain.niche, usp: brain.usp },
+      });
+      const res = await llmCall({
+        messages: [{ role: "user", content: prompt }],
+        maxTokens: 3000,
+        temperature: 0.7,
+      });
+      const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
+      addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
+      window.dispatchEvent(new Event("ados:usage"));
+      const parsed = tryParseJson<Partial<BrandBrain>>(res.text) ?? {};
+      setBrain((b) => mergeFillEmpty(b, parsed, { url, deterministic: det }));
+    } catch (e: any) {
+      setError(e?.message ?? "Fill failed");
+    } finally {
+      setExtracting(false);
+    }
+  }
+
+  /** Apply industry-template defaults to any field still empty. No AI cost. */
+  function applyTemplateFill() {
+    setError(null);
+    const { brain: out, filled, templateSlug } = applyIndustryFallback(brain);
+    if (filled.length === 0) {
+      setError(templateSlug ? "Nothing left to fill from the closest template." : "No matching industry template — set 'Industry' first.");
+      return;
+    }
+    setBrain(out);
   }
 
   async function save() {
@@ -277,16 +365,25 @@ export function BrandBrainForm({ initial }: Props) {
                 placeholder="https://example.com"
               />
               <button
-                onClick={ingestFromUrl}
+                onClick={fillEmptyWithAi}
                 disabled={extracting}
                 className="btn-ghost shrink-0"
-                title="Re-fetch from this URL"
+                title="Re-fetch the URL and fill ONLY the fields you've left empty. Your manual edits are preserved."
                 type="button"
               >
-                <RefreshCw size={11} className={extracting ? "animate-spin" : ""} /> sync
+                <RefreshCw size={11} className={extracting ? "animate-spin" : ""} /> {extracting ? "filling…" : "fill empty with AI"}
+              </button>
+              <button
+                onClick={applyTemplateFill}
+                disabled={extracting}
+                className="btn-ghost shrink-0"
+                title="Backfill empty fields from the closest industry template — no AI cost."
+                type="button"
+              >
+                <Sparkles size={11} /> template fill
               </button>
             </div>
-            <p className="text-[10px] font-mono uppercase tracking-ui-wide text-ink-subtle mt-1">paste any URL · auto-extract with one click</p>
+            <p className="text-[10px] font-mono uppercase tracking-ui-wide text-ink-subtle mt-1">paste a URL · "fill empty" re-runs AI for blank fields only · "template fill" uses industry defaults (free)</p>
           </div>
           <Field label="Tone" value={brain.tone} onChange={(v) => setField("tone", v)} />
           <Field

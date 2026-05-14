@@ -264,6 +264,67 @@ export async function ingestUrl(rawUrl: string, signal?: AbortSignal): Promise<I
 }
 
 /**
+ * Multi-page ingest. Given a successful homepage ingest, derives 2-3 likely
+ * subpages (/about, /pricing, /services, /contact) from the metadata's
+ * page anchors and ingests them in parallel. Concatenates the content.
+ * Used to enrich the AI's input — most brand info lives on /about, not the home.
+ */
+export async function ingestSubpages(
+  homepage: IngestResult,
+  signal?: AbortSignal,
+  maxPages = 3,
+): Promise<{ extraContent: string; pages: string[]; failed: string[] }> {
+  const out = { extraContent: "", pages: [] as string[], failed: [] as string[] };
+  let base: URL;
+  try { base = new URL(homepage.url); } catch { return out; }
+
+  // Likely high-signal subpage paths. We try these in order and keep the
+  // first `maxPages` that work. Each individual fetch is short-timeout so
+  // a single hanging path doesn't block the whole pipeline.
+  const candidates = [
+    "/about", "/about-us", "/about/",
+    "/pricing", "/plans",
+    "/services", "/products",
+    "/contact", "/contact-us",
+    "/why-us", "/team",
+  ];
+
+  // Dedupe by path (avoid /about + /about/ counting separately).
+  const seen = new Set<string>();
+  const targets: string[] = [];
+  for (const path of candidates) {
+    const u = new URL(path, base.origin);
+    const key = u.pathname.replace(/\/+$/, "/");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    targets.push(u.toString());
+    if (targets.length >= maxPages * 2) break;
+  }
+
+  const fetches = targets.map(async (url) => {
+    const result = await trySidecar(url, signal).catch(() => null);
+    if (result && result.ok && result.content && result.content.length > 300) {
+      return { url, content: result.content };
+    }
+    return null;
+  });
+
+  // Wait for all (parallel) — settled, not all-or-nothing
+  const results = await Promise.allSettled(fetches);
+  const successful: { url: string; content: string }[] = [];
+  for (const r of results) {
+    if (r.status === "fulfilled" && r.value) successful.push(r.value);
+    if (r.status === "rejected") out.failed.push(String(r.reason));
+  }
+  // Cap at maxPages — first wins (subpages were ordered by priority).
+  successful.slice(0, maxPages).forEach((p) => {
+    out.pages.push(p.url);
+    out.extraContent += `\n\n=== ${p.url} ===\n${p.content.slice(0, 8000)}`;
+  });
+  return out;
+}
+
+/**
  * Manual ingest helper — given user-pasted page content, returns it in the same shape as a successful URL ingest.
  */
 export function ingestPasted(rawUrl: string, content: string): IngestOutcome {
@@ -293,6 +354,27 @@ const SOCIAL_HOSTS: Record<string, SocialProbe["platform"]> = {
   "youtube.com": "youtube",
   "youtu.be": "youtube",
 };
+
+/**
+ * Returns true if the input looks like a usable domain (has a TLD, no spaces,
+ * no special chars). When false, the caller should treat it as a business name
+ * to feed into Google search instead of trying to ingest it as a URL.
+ */
+export function looksLikeUrl(input: string): boolean {
+  const v = input.trim();
+  if (!v) return false;
+  // Has spaces → not a URL, it's a business name
+  if (/\s/.test(v)) return false;
+  // Has a TLD-ish suffix (.com, .co.uk, .io, .in, .org, etc.)
+  if (!/\.[a-z]{2,}(?:\/|\?|#|$)/i.test(v)) return false;
+  // Try to construct a URL — final sanity check
+  try {
+    new URL(/^https?:\/\//i.test(v) ? v : `https://${v}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function detectSocial(url: string): SocialProbe | null {
   try {

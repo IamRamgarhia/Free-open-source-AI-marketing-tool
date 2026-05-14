@@ -33,6 +33,10 @@ export interface BrandBrain {
   audience_pain_points: string[];
   audience_desires: string[];
   audience_demographics: string;
+  /** Geographic service area derived from JSON-LD Place / LocalBusiness schema.
+   *  Used by the system prompt for local-targeted copy (e.g., "{biz_name} serves
+   *  {service_area}"). Empty string for non-local brands. */
+  service_area?: string;
   usp: string;
   key_benefits: string[];
   key_messages: string[];
@@ -77,6 +81,7 @@ export function emptyBrandBrain(): BrandBrain {
     audience_pain_points: [],
     audience_desires: [],
     audience_demographics: "",
+    service_area: "",
     usp: "",
     key_benefits: [],
     key_messages: [],
@@ -158,7 +163,11 @@ AUDIENCE:
 - Who: ${brain.audience_who || "(unspecified)"}
 - Demographics: ${brain.audience_demographics || "(unspecified)"}
 - Pain points: ${list(brain.audience_pain_points)}
-- Desires: ${list(brain.audience_desires)}
+- Desires: ${list(brain.audience_desires)}${brain.service_area ? `
+
+SERVICE AREA (location-aware copy):
+- Brand operates out of: ${brain.service_area}
+- When writing geo-targeted copy, name the area + lean into local proof points.` : ""}
 
 PRODUCT/OFFER:
 - USP: ${brain.usp || "(unspecified)"}

@@ -58,10 +58,10 @@ export function deterministicFillFromMetadata(meta: IngestMetadata | undefined, 
       out.name = primaryOrg.name;
     }
     if (primaryOrg.logo) out.favicon_url = out.favicon_url || primaryOrg.logo;
-    // NOTE: Organization.address is the BRAND's office address, not the
-    // customer demographic. Don't write it to audience_demographics. (See
-    // audit finding #1.) The address is retained internally on the org object
-    // in case a future field needs it.
+    // Organization.address → service_area for local-business targeting.
+    // (Audit finding #1: this is the BRAND's address, NOT the audience demographic.
+    // We populate service_area, which the system prompt uses for geo-aware copy.)
+    if (primaryOrg.address) out.service_area = primaryOrg.address;
     // Organization.description is often the cleanest one-sentence positioning
     // the site provides — better than the meta description because it's
     // explicitly written for machine consumption.
