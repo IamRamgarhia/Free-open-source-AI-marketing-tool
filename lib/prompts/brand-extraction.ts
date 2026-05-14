@@ -14,6 +14,15 @@ export interface BrandExtractionInput {
     social_links?: Record<string, string>;
     json_ld?: unknown[];
   };
+  // Fields already filled deterministically from metadata. The AI should
+  // accept these verbatim and focus on the inference-heavy fields the
+  // metadata couldn't produce.
+  prefilled?: {
+    business_name?: string;
+    industry?: string;
+    niche?: string;
+    usp?: string;
+  };
 }
 
 export function buildBrandExtractionPrompt(input: BrandExtractionInput): string {
@@ -30,9 +39,18 @@ RULE: Whatever appears above MUST populate the matching output fields verbatim. 
 `
     : "";
 
+  const pf = input.prefilled;
+  const prefilledBlock = pf && (pf.business_name || pf.industry || pf.niche || pf.usp)
+    ? `INPUT — FIELDS ALREADY FILLED DETERMINISTICALLY (use these verbatim — they came from page metadata):
+${pf.business_name ? `- business_name: ${pf.business_name}\n` : ""}${pf.industry ? `- industry: ${pf.industry}\n` : ""}${pf.niche ? `- niche: ${pf.niche}\n` : ""}${pf.usp ? `- usp: ${pf.usp}\n` : ""}
+YOUR JOB: Echo these fields verbatim in your output AND focus your effort on the INFERENCE-HEAVY fields below: tone, audience_who, audience_pain_points, audience_desires, key_benefits, key_messages, products, platforms, content_pillars, personality_traits, writing_style, words_to_use, differentiators. Do NOT return empty arrays for those — infer from the content even when it's not explicit.
+
+`
+    : "";
+
   return `You are a senior brand strategist + direct-response copywriter with 20 years experience. Your job is to extract a COMPLETE brand intelligence profile from the content below. The user pasted this content trusting you to populate everything you can reasonably deduce — empty fields are a worse outcome than thoughtful inferences.
 
-${metadataBlock}INPUT — WEBSITE / LANDING CONTENT (body text, after HTML strip):
+${prefilledBlock}${metadataBlock}INPUT — WEBSITE / LANDING CONTENT (body text, after HTML strip):
 """
 ${input.website_content?.trim() || "(not provided)"}
 """
@@ -90,35 +108,50 @@ HONESTY FLOOR (never crossable — different from inference):
 
 ═══════════════════════════════════════════════════════════════
 
-Return ONLY valid JSON in this exact schema (no markdown fences, no prose):
+═══════════════════════════════════════════════════════════════
+HARD MINIMUMS — empty arrays for these fields = a failed extraction:
+═══════════════════════════════════════════════════════════════
+- products: minimum 3 entries (infer from services mentioned, navigation, hero copy)
+- platforms: list every social platform referenced anywhere — empty only if you find ZERO
+- content_pillars: 4-6 recurring themes
+- audience_pain_points: minimum 3 (infer from what the offer solves)
+- audience_desires: minimum 3 (infer from outcome language)
+- key_benefits: minimum 3 (the value the offer delivers)
+- key_messages: minimum 2 (core repeatable claims)
+- personality_traits: 2-4 adjectives (read the writing voice)
+- words_to_use: minimum 5 (literal words from the brand's own copy)
+- differentiators: minimum 2 (what they emphasize over alternatives)
+
+Return ONLY valid JSON. No markdown fences. No prose around it. Here is the EXACT schema with example shapes — DO NOT echo the example values, fill them with this brand's specifics:
+
 {
-  "business_name": "string — ALWAYS populate",
-  "industry": "string — ALWAYS populate (infer from services)",
-  "niche": "string — ALWAYS populate (one-sentence positioning)",
-  "products": [],
-  "platforms": [],
-  "content_pillars": [],
+  "business_name": "Acme Co",
+  "industry": "B2B SaaS analytics platform for ecommerce stores",
+  "niche": "One-sentence positioning the brand actually uses.",
+  "products": ["Core analytics dashboard", "Attribution module", "Cohort exports"],
+  "platforms": ["Instagram", "LinkedIn", "YouTube"],
+  "content_pillars": ["Attribution clarity", "Retention math", "Bootstrapped founder stories", "Tool teardowns"],
   "social_links": {
     "instagram": "", "tiktok": "", "youtube": "", "linkedin": "",
     "twitter": "", "facebook": "", "pinterest": "", "threads": "", "other": ""
   },
-  "tone": "string — ALWAYS populate (2-4 adjectives)",
-  "personality_traits": [],
-  "writing_style": "string",
-  "words_to_use": [],
-  "words_to_avoid": [],
-  "audience_who": "string — ALWAYS populate (infer from signals)",
-  "audience_pain_points": [],
-  "audience_desires": [],
-  "audience_demographics": "",
-  "usp": "string — populate whenever a tagline/slogan/value-prop exists",
-  "key_benefits": [],
-  "key_messages": [],
-  "objections": [],
-  "objection_handling": [],
-  "competitors": [],
-  "differentiators": [],
-  "price_positioning": "",
+  "tone": "Confident, direct, slightly irreverent",
+  "personality_traits": ["Direct", "Analytical", "Anti-fluff"],
+  "writing_style": "Short punchy sentences, concrete numbers, no corporate hedging",
+  "words_to_use": ["actually", "the math", "compounding", "leverage", "honest"],
+  "words_to_avoid": ["synergy", "best-in-class", "world-class"],
+  "audience_who": "Bootstrapped ecommerce founders doing $1M-$10M ARR who manage their own paid ads",
+  "audience_pain_points": ["Can't tell which channel actually drove the sale", "Spending more on tools than the value they return", "Spreadsheet hell every Monday"],
+  "audience_desires": ["A single dashboard they actually trust", "Time back from weekly reporting", "Confidence in scale-up decisions"],
+  "audience_demographics": "30-45, English-speaking, US/UK/AU, technically literate",
+  "usp": "The only attribution tool built by ecommerce founders for ecommerce founders.",
+  "key_benefits": ["Stop double-counting revenue across channels", "Cut reporting time from 4 hours to 10 minutes", "See which ad actually drove last week's revenue"],
+  "key_messages": ["Attribution that respects how customers actually buy", "Built for operators, not analysts"],
+  "objections": ["Will this work with my existing stack?", "How long until we see signal?"],
+  "objection_handling": ["Plugs into Shopify, GA4, Meta Ads, Klaviyo on day one — no engineering required.", "Most stores see clean attribution within 14 days of install."],
+  "competitors": ["Triple Whale", "Northbeam"],
+  "differentiators": ["Founder-built, not VC-built", "Flat pricing, not revenue-share"],
+  "price_positioning": "Mid-market — premium to free tools, cheaper than enterprise platforms",
   "voc_phrases": [],
   "voc_pain_quotes": [],
   "voc_success_quotes": [],
@@ -129,5 +162,7 @@ Return ONLY valid JSON in this exact schema (no markdown fences, no prose):
 Additional rules:
 - Match every entry in "objections" with a same-index rebuttal in "objection_handling".
 - For audience-related fields, infer from the SHAPE of the offer + tone + price signals. A free consultation suggests price-sensitive; enterprise terminology suggests B2B mid-market; etc.
-- Content pillars: 4-6 themes the brand consistently posts about. Infer from repeated topics, blog categories, About-page emphasis.`;
+- Content pillars: 4-6 themes the brand consistently posts about. Infer from repeated topics, blog categories, About-page emphasis.
+- voc_* and *_angles arrays stay empty unless the input includes real reviews or ad performance data — never fabricate quotes.
+- The example above is a TEMPLATE showing the shape and quality bar. Replace every value with this specific brand's information.`;
 }

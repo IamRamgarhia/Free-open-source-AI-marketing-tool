@@ -126,7 +126,19 @@ function Inner() {
       })`;
       setQuickStatus("③ Asking AI to fill the inference-heavy fields (tone, audience, pain points, products)…");
       const res = await llmCall({
-        messages: [{ role: "user", content: buildBrandExtractionPrompt({ website_content: r.content, description: `Brand at ${r.url}`, audience_notes: "", reviews: "", metadata: r.metadata }) }],
+        messages: [{ role: "user", content: buildBrandExtractionPrompt({
+          website_content: r.content,
+          description: `Brand at ${r.url}`,
+          audience_notes: "",
+          reviews: "",
+          metadata: r.metadata,
+          prefilled: {
+            business_name: deterministic.business_name,
+            industry: deterministic.industry,
+            niche: deterministic.niche,
+            usp: deterministic.usp,
+          },
+        }) }],
         maxTokens: 3000,
         temperature: 0.4,
       });
