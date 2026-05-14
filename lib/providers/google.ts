@@ -29,6 +29,21 @@ function toGeminiBody(opts: LLMCallOptions) {
 }
 
 async function readError(res: Response): Promise<LLMError> {
+  // 429 retry tracking: Gemini puts retryDelay in error.details[].retryDelay
+  // (e.g. "15.66s"). We also accept the Retry-After header as a fallback.
+  if (res.status === 429) {
+    try {
+      const cloned = res.clone();
+      const body = await cloned.json();
+      // Find the RetryInfo entry in the details array
+      const details: any[] = body?.error?.details ?? [];
+      const retryInfo = details.find((d) => typeof d?.retryDelay === "string");
+      const delayStr = retryInfo?.retryDelay ?? res.headers.get("retry-after") ?? "60s";
+      const seconds = parseFloat(String(delayStr).replace(/s$/, "")) || 60;
+      const { recordRateLimitHit } = await import("../quota-tracker");
+      recordRateLimitHit("google", seconds);
+    } catch {}
+  }
   try {
     const body = await res.json();
     return new LLMError(body?.error?.message ?? res.statusText, res.status, "google");

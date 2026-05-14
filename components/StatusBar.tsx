@@ -7,6 +7,7 @@ import { getProvider } from "@/lib/providers";
 import { formatCost } from "@/lib/utils";
 import { getProviderLimits } from "@/lib/provider-limits";
 import { ProviderSwitcher } from "@/components/ProviderSwitcher";
+import { getQuotaSnapshot, getProviderLimitCaps, formatCountdown, type QuotaSnapshot } from "@/lib/quota-tracker";
 
 export function StatusBar() {
   const [info, setInfo] = useState({
@@ -20,6 +21,9 @@ export function StatusBar() {
     limitSummary: "",
     limitDocsUrl: "",
     hasFreeTier: false,
+    quota: null as QuotaSnapshot | null,
+    rpmCap: null as number | null,
+    rpdCap: null as number | null,
   });
 
   useEffect(() => {
@@ -30,6 +34,8 @@ export function StatusBar() {
       const model = provider?.models.find((m) => m.id === modelId) ?? null;
       const usage = getUsage();
       const limits = getProviderLimits(pid);
+      const quota = getQuotaSnapshot(pid);
+      const caps = pid ? getProviderLimitCaps(pid) : { rpm: null, rpd: null };
       setInfo({
         providerName: provider?.name ?? "no provider",
         modelLabel: model?.label?.split("—")[0]?.trim() ?? modelId,
@@ -41,6 +47,9 @@ export function StatusBar() {
         limitSummary: limits?.summary ?? "",
         limitDocsUrl: limits?.docs_url ?? "",
         hasFreeTier: limits?.has_free_tier ?? false,
+        quota,
+        rpmCap: caps.rpm,
+        rpdCap: caps.rpd,
       });
     };
     tick();
@@ -48,11 +57,13 @@ export function StatusBar() {
     const h = () => tick();
     window.addEventListener("ados:usage", h);
     window.addEventListener("ados:provider-changed", h);
+    window.addEventListener("ados:quota-changed", h);
     window.addEventListener("storage", h);
     return () => {
       clearInterval(id);
       window.removeEventListener("ados:usage", h);
       window.removeEventListener("ados:provider-changed", h);
+      window.removeEventListener("ados:quota-changed", h);
       window.removeEventListener("storage", h);
     };
   }, []);
@@ -84,6 +95,7 @@ export function StatusBar() {
             </span>
           </Cell>
         ) : null}
+        {info.quota ? <QuotaCell quota={info.quota} rpmCap={info.rpmCap} rpdCap={info.rpdCap} /> : null}
         <Cell>
           <span className="text-ink-faint">Spend</span>
           <span className="text-live tabular font-medium">{formatCost(info.cost)}</span>
@@ -113,5 +125,34 @@ function Cell({ children }: { children: React.ReactNode }) {
     <div className="flex items-center gap-1.5 px-2 border-r border-base-600 last:border-r-0 first:pl-0">
       {children}
     </div>
+  );
+}
+
+function QuotaCell({ quota, rpmCap, rpdCap }: { quota: QuotaSnapshot; rpmCap: number | null; rpdCap: number | null }) {
+  // Highest priority: provider explicitly told us we're throttled.
+  if (quota.blocked_for_seconds && quota.blocked_for_seconds > 0) {
+    return (
+      <Cell>
+        <span className="text-[10px] uppercase tracking-ui-wide text-neg font-medium" title="Provider returned 429 with a retry-after. Wait this long before the next request will succeed.">
+          ⏳ rate-limited · retry in {formatCountdown(quota.blocked_for_seconds)}
+        </span>
+      </Cell>
+    );
+  }
+  // Soft display: minute counter against documented cap (RPM). Day counter
+  // also shown when capped (RPD), which is rarer.
+  if (!rpmCap && !rpdCap) return null;
+  const minuteWarn = rpmCap && quota.minute_used >= rpmCap * 0.8;
+  const dayWarn = rpdCap && quota.day_used >= rpdCap * 0.8;
+  const color = minuteWarn || dayWarn ? "text-live" : "text-ink-faint";
+  return (
+    <Cell>
+      <span className={`text-[10px] uppercase tracking-ui-wide ${color} hidden md:inline tabular`} title="Local request count vs documented per-minute / per-day caps. Resets shown when known.">
+        {rpmCap ? `${quota.minute_used}/${rpmCap} min` : null}
+        {rpmCap && rpdCap ? " · " : null}
+        {rpdCap ? `${quota.day_used}/${rpdCap} day` : null}
+        {quota.minute_resets_in_seconds && quota.minute_used >= (rpmCap ?? Infinity) * 0.5 ? ` · resets ${formatCountdown(quota.minute_resets_in_seconds)}` : ""}
+      </span>
+    </Cell>
   );
 }

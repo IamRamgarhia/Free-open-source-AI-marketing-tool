@@ -99,26 +99,20 @@ export function hasAnyKeyConfigured(): boolean {
   return false;
 }
 
-/** Per-provider format check. The old `length > 8` threshold accepted "invalid!"
- *  (9 chars) as a valid key, which made the vision-fallback picker offer it as a
- *  provider option — leading to a 401 mid-generation. Checks the shortest known
- *  real prefix per provider. (Audit finding #23.) */
-function isPlausibleKey(providerId: string, key: string | null): boolean {
+/** Plausibility check for a stored API key. We deliberately keep this LOOSE:
+ *  the only authoritative validation is Save+Verify (which calls the real API).
+ *  Strict per-provider prefix checks here would mark working keys as missing
+ *  when the provider's key format changes (it has — OpenRouter ships keys with
+ *  both `sk-or-` and other prefixes; some Gemini keys are shorter than 30 chars
+ *  depending on how the user provisioned them).
+ *
+ *  Length-only check: a string of 12+ characters has enough entropy that it's
+ *  almost certainly a real key. A typo'd "abc123" doesn't pass. The original
+ *  `length > 8` threshold passed obviously bogus "invalid!" (audit #23); 12
+ *  is the right floor without being prefix-strict. */
+function isPlausibleKey(_providerId: string, key: string | null): boolean {
   if (!key) return false;
-  const v = key.trim();
-  if (v.length < 20) return false;
-  switch (providerId) {
-    case "anthropic": return v.startsWith("sk-ant-");
-    case "openai": return v.startsWith("sk-");
-    case "openrouter": return v.startsWith("sk-or-");
-    case "groq": return v.startsWith("gsk_");
-    case "cerebras": return v.length >= 32; // no documented prefix
-    case "together": return v.length >= 40;
-    case "deepseek": return v.startsWith("sk-");
-    case "mistral": return v.length >= 32;
-    case "google": return v.length >= 30; // AI Studio keys are ~39 chars
-    default: return v.length >= 20;
-  }
+  return key.trim().length >= 12;
 }
 
 /** Return every provider id that has a saved key (length > 8) in localStorage.

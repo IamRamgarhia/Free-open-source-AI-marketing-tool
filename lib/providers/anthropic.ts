@@ -37,6 +37,13 @@ async function readError(res: Response): Promise<LLMError> {
   // (Audit finding #61.)
   const ra = res.headers.get("retry-after");
   const retryPrefix = res.status === 429 && ra ? `Rate limit — retry in ${ra}s. ` : res.status === 429 ? "Rate limit hit. " : "";
+  if (res.status === 429) {
+    const seconds = Number(ra) || 60;
+    try {
+      const { recordRateLimitHit } = await import("../quota-tracker");
+      recordRateLimitHit("anthropic", seconds);
+    } catch {}
+  }
   try {
     const body = await res.json();
     return new LLMError(retryPrefix + (body?.error?.message ?? res.statusText), res.status, "anthropic");

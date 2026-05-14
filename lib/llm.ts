@@ -40,6 +40,8 @@ function resolve(opts: RunOptions): { provider: Provider; apiKey: string; model:
   return { provider, apiKey, model };
 }
 
+import { recordRequest } from "./quota-tracker";
+
 export async function llmCall(opts: RunOptions): Promise<LLMResult & { providerId: string }> {
   const { provider, apiKey, model } = resolve(opts);
   const res = await provider.call({
@@ -51,6 +53,7 @@ export async function llmCall(opts: RunOptions): Promise<LLMResult & { providerI
     temperature: opts.temperature,
     signal: opts.signal,
   });
+  recordRequest(provider.id);
   return { ...res, providerId: provider.id };
 }
 
@@ -68,6 +71,7 @@ export async function llmStream(opts: RunOptions, handlers: StreamHandlers): Pro
     },
     handlers
   );
+  recordRequest(provider.id);
   return { ...res, providerId: provider.id };
 }
 

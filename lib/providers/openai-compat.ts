@@ -32,6 +32,15 @@ async function readError(res: Response, providerId: string): Promise<LLMError> {
     : res.status === 429
       ? "Rate limit hit. "
       : "";
+  // Record the throttle so the StatusBar can show a countdown to retry.
+  if (res.status === 429) {
+    const seconds = Number(retryAfter) || 60;
+    try {
+      // Avoid hard-importing to keep this fn synchronous-feeling; the lib is small.
+      const { recordRateLimitHit } = await import("../quota-tracker");
+      recordRateLimitHit(providerId, seconds);
+    } catch {}
+  }
   try {
     const body = await res.json();
     return new LLMError(retryPrefix + (body?.error?.message ?? body?.message ?? res.statusText), res.status, providerId);
