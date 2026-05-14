@@ -135,7 +135,8 @@ function Inner() {
       const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
       addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
       window.dispatchEvent(new Event("ados:usage"));
-      const json = tryParseJson(res.text);
+      const finalText = res.text || stream.text;
+      const json = tryParseJson(finalText);
       setParsed(json);
       const ad: GeneratedAd = {
         id: crypto.randomUUID(),
@@ -145,7 +146,7 @@ function Inner() {
         title: `Steal · ${input.competitor_name || "competitor"} · ${input.our_product}`,
         input: input as unknown as Record<string, unknown>,
         output_json: json,
-        output_text: res.text,
+        output_text: finalText,
         model_id: res.modelId,
         usage_input_tokens: res.usage?.input_tokens ?? 0,
         usage_output_tokens: res.usage?.output_tokens ?? 0,

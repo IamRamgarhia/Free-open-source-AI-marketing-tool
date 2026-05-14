@@ -18,6 +18,7 @@ import { testApiKey } from "@/lib/llm";
 import { exportAll, importAll, wipeAll } from "@/lib/storage";
 import { formatCost, formatTokens } from "@/lib/utils";
 import { CURRENCIES, getCurrencyCode, setCurrencyCode } from "@/lib/currency";
+import { getProviderLimits } from "@/lib/provider-limits";
 
 export default function SettingsPage() {
   return (
@@ -188,7 +189,31 @@ function SettingsInner() {
                         </div>
                         <p className="text-[11px] text-ink-muted mt-1 leading-relaxed">{p.description}</p>
                         {p.free_note ? <p className="text-[10px] font-mono uppercase tracking-ui-wide text-pos mt-1">{p.free_note}</p> : null}
-                        <a href={p.get_key_url} target="_blank" rel="noreferrer" className="text-[10px] font-mono uppercase tracking-ui-wide text-info hover:underline inline-flex items-center gap-0.5 mt-1">
+                        {(() => {
+                          const lim = getProviderLimits(p.id);
+                          if (!lim) return null;
+                          return (
+                            <details className="mt-1">
+                              <summary className={`cursor-pointer list-none text-[10px] font-mono uppercase tracking-ui-wide ${lim.has_free_tier ? "text-pos" : "text-ink-faint"} hover:text-ink transition`}>
+                                ▸ rate limits · {lim.has_free_tier ? "free" : "paid"}
+                              </summary>
+                              <ul className="mt-2 ml-2 space-y-0.5 text-[11px] text-ink-muted leading-relaxed">
+                                {lim.details.map((d, i) => (
+                                  <li key={i} className="flex gap-1.5">
+                                    <span className="text-ink-faint">·</span>
+                                    <span>{d}</span>
+                                  </li>
+                                ))}
+                                <li className="mt-1">
+                                  <a href={lim.docs_url} target="_blank" rel="noreferrer" className="text-info hover:underline inline-flex items-center gap-0.5">
+                                    official docs <ExternalLink size={9} />
+                                  </a>
+                                </li>
+                              </ul>
+                            </details>
+                          );
+                        })()}
+                        <a href={p.get_key_url} target="_blank" rel="noreferrer" className="text-[10px] font-mono uppercase tracking-ui-wide text-info hover:underline inline-flex items-center gap-0.5 mt-1 ml-2">
                           get key <ExternalLink size={9} />
                         </a>
                       </div>

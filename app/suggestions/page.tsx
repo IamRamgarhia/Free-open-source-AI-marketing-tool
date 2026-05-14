@@ -77,7 +77,11 @@ function Inner() {
       const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
       addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
       window.dispatchEvent(new Event("ados:usage"));
-      const json = tryParseJson(res.text);
+      // Some providers (Gemini) sometimes return res.text empty even when
+      // streaming worked. Fall back to the accumulated stream buffer so the
+      // saved ad always has the actual generated content.
+      const finalText = res.text || stream.text;
+      const json = tryParseJson(finalText);
       setParsed(json);
       const ad: GeneratedAd = {
         id: crypto.randomUUID(),
@@ -87,7 +91,7 @@ function Inner() {
         title: `Suggestions · ${brain.name || brain.business_name}`,
         input: {},
         output_json: json,
-        output_text: res.text,
+        output_text: finalText,
         model_id: res.modelId,
         usage_input_tokens: res.usage?.input_tokens ?? 0,
         usage_output_tokens: res.usage?.output_tokens ?? 0,

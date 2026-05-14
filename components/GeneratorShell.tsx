@@ -404,7 +404,7 @@ function Inner<I extends Record<string, unknown>>({ config, scope }: Props<I>) {
         </section>
 
         <section className="lg:col-span-3 space-y-4">
-          <OutputArea running={running} stream={stream.text} parsed={parsed} config={config as unknown as GeneratorConfig<Record<string, unknown>>} hasRun={hasRun} />
+          <OutputArea running={running} stream={stream.text} parsed={parsed} config={config as unknown as GeneratorConfig<Record<string, unknown>>} hasRun={hasRun} lastError={error} />
           {savedId && nextSteps.length ? <NextStepsPanel steps={nextSteps} /> : null}
         </section>
       </div>
@@ -633,13 +633,18 @@ const OutputArea = memo(function OutputArea<I extends Record<string, unknown>>({
   parsed,
   config,
   hasRun,
+  lastError,
 }: {
   running: boolean;
   stream: string;
   parsed: any;
   config: GeneratorConfig<I>;
   hasRun: boolean;
+  lastError?: string | null;
 }) {
+  // Detect a rate-limit error from common provider phrasings so we can give a
+  // direct, actionable message instead of generic "your key may be invalid".
+  const isRateLimit = lastError ? /rate limit|quota|too many requests|429|retry in/i.test(lastError) : false;
   // First-load empty state — only before any run has happened
   if (!running && !stream && !parsed && !hasRun) {
     return (
@@ -651,22 +656,56 @@ const OutputArea = memo(function OutputArea<I extends Record<string, unknown>>({
 
   // Generation finished with nothing — surface a clear error instead of staying silent
   if (!running && !stream && !parsed && hasRun) {
+    if (isRateLimit) {
+      // Specific rate-limit UI: actionable next steps + a link to switch
+      // provider. Generic "API key invalid" hint is removed for this case
+      // because the key obviously works — they just exceeded the quota.
+      return (
+        <div className="border border-live/40 bg-live/5 p-5 space-y-2">
+          <div className="text-[10px] font-mono uppercase tracking-ui-mega text-live flex items-center gap-2">
+            <span className="h-1 w-1 bg-warn" /> rate-limit hit (free-tier quota)
+          </div>
+          <p className="text-sm text-ink leading-relaxed">
+            Provider rejected with: <code className="text-[11px] font-mono text-live bg-base-900/60 px-1 py-0.5">{lastError}</code>
+          </p>
+          <p className="text-[12px] text-ink-muted leading-relaxed">
+            Your API key works fine — you've hit the free-tier ceiling for this provider. Options:
+          </p>
+          <ul className="text-[12px] text-ink-muted list-disc list-inside space-y-0.5">
+            <li>Wait the retry-in seconds shown in the error, then retry the same button.</li>
+            <li>Switch to a different provider in <a href="/settings" className="text-live underline">Settings</a> — Groq + Cerebras have generous free tiers.</li>
+            <li>Add billing on the same provider to upgrade past the free-tier cap.</li>
+          </ul>
+          <p className="text-[11px] font-mono uppercase tracking-ui-wide text-ink-subtle pt-1">
+            see exact limits in settings → rate limits dropdown · or in the status bar at the bottom of the page
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="border border-neg/40 bg-neg/5 p-5 space-y-2">
         <div className="text-[10px] font-mono uppercase tracking-ui-mega text-neg flex items-center gap-2">
           <span className="h-1 w-1 bg-neg" /> empty response
         </div>
-        <p className="text-sm text-ink leading-relaxed">
-          Your provider returned no content. This usually means:
-        </p>
-        <ul className="text-[12px] text-ink-muted list-disc list-inside space-y-0.5">
-          <li>API key in <a href="/settings" className="text-live underline">Settings</a> is invalid or rate-limited</li>
-          <li>Selected model doesn&apos;t support the request size — try a different model</li>
-          <li>Free-tier quota exhausted — switch provider in Settings</li>
-        </ul>
-        <p className="text-[11px] font-mono uppercase tracking-ui-wide text-ink-subtle">
-          open browser devtools → network tab → re-run to see the actual response from the provider
-        </p>
+        {lastError ? (
+          <p className="text-sm text-ink leading-relaxed">
+            Provider error: <code className="text-[11px] font-mono text-neg bg-base-900/60 px-1 py-0.5">{lastError}</code>
+          </p>
+        ) : (
+          <>
+            <p className="text-sm text-ink leading-relaxed">
+              Your provider returned no content. This usually means:
+            </p>
+            <ul className="text-[12px] text-ink-muted list-disc list-inside space-y-0.5">
+              <li>API key in <a href="/settings" className="text-live underline">Settings</a> is invalid or rate-limited</li>
+              <li>Selected model doesn&apos;t support the request size — try a different model</li>
+              <li>Free-tier quota exhausted — switch provider in Settings</li>
+            </ul>
+            <p className="text-[11px] font-mono uppercase tracking-ui-wide text-ink-subtle">
+              open browser devtools → network tab → re-run to see the actual response from the provider
+            </p>
+          </>
+        )}
       </div>
     );
   }

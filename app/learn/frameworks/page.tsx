@@ -69,7 +69,7 @@ function Inner() {
       );
       addUsage(estimateCostUsd(res.providerId, res.modelId, res.usage), res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
       window.dispatchEvent(new Event("ados:usage"));
-      setParsed(tryParseJson(res.text));
+      setParsed(tryParseJson(res.text || stream.text));
     } catch (e: any) {
       if (e?.name !== "AbortError") setError(e?.message ?? "Failed");
     } finally {

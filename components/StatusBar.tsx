@@ -5,6 +5,7 @@ import Link from "next/link";
 import { getActiveProviderId, getActiveModelId, getUsage, hasAnyKeyConfigured, getProviderKey } from "@/lib/settings";
 import { getProvider } from "@/lib/providers";
 import { formatCost } from "@/lib/utils";
+import { getProviderLimits } from "@/lib/provider-limits";
 
 export function StatusBar() {
   const [info, setInfo] = useState({
@@ -15,6 +16,9 @@ export function StatusBar() {
     input: 0,
     output: 0,
     time: "",
+    limitSummary: "",
+    limitDocsUrl: "",
+    hasFreeTier: false,
   });
 
   useEffect(() => {
@@ -24,6 +28,7 @@ export function StatusBar() {
       const modelId = pid ? getActiveModelId(pid) ?? provider?.default_model ?? "—" : "—";
       const model = provider?.models.find((m) => m.id === modelId) ?? null;
       const usage = getUsage();
+      const limits = getProviderLimits(pid);
       setInfo({
         providerName: provider?.name ?? "no provider",
         modelLabel: model?.label?.split("—")[0]?.trim() ?? modelId,
@@ -32,6 +37,9 @@ export function StatusBar() {
         input: usage.input,
         output: usage.output,
         time: new Date().toTimeString().slice(0, 8),
+        limitSummary: limits?.summary ?? "",
+        limitDocsUrl: limits?.docs_url ?? "",
+        hasFreeTier: limits?.has_free_tier ?? false,
       });
     };
     tick();
@@ -67,6 +75,13 @@ export function StatusBar() {
           <span className="text-ink-faint">Model</span>
           <span className="text-ink font-medium">{info.modelLabel}</span>
         </Cell>
+        {info.limitSummary ? (
+          <Cell>
+            <span className={`text-[10px] uppercase tracking-ui-wide ${info.hasFreeTier ? "text-pos" : "text-ink-subtle"} hidden md:inline`} title={info.limitSummary + (info.limitDocsUrl ? ` · ${info.limitDocsUrl}` : "")}>
+              {info.hasFreeTier ? "FREE" : "PAID"} · {info.limitSummary.split("·")[0]?.replace(/^FREE/, "").replace(/^Paid/, "").trim() || "see docs"}
+            </span>
+          </Cell>
+        ) : null}
         <Cell>
           <span className="text-ink-faint">Spend</span>
           <span className="text-live tabular font-medium">{formatCost(info.cost)}</span>
