@@ -135,10 +135,15 @@ The default is **3005** for the web app and **3006** for the sidecar. Change eit
 - **Zero setup:** open `http://openadkit.localhost:3005/` instead of `http://localhost:3005/`. Works in Chrome / Firefox / Safari / Edge today — all modern browsers auto-resolve `*.localhost` to 127.0.0.1.
 - **Hosts-file option:** for `http://openadkit.local/` with no port shown, run `scripts/set-domain.bat` (Windows, as admin) or `sudo bash scripts/set-domain.sh` (Mac/Linux). Full guide: [docs/CUSTOM_DOMAIN.md](docs/CUSTOM_DOMAIN.md).
 
-### Your data lives in this folder
-After install, **everything you do** (brand brains, generated ads, campaigns, checklists, performance logs) auto-saves to `data/snapshot.json` in the project folder.
+### Where your data lives
 
-**Zip the folder → move to another machine → run `start` again → everything is there.** That's the whole portability story.
+**Path A — Hosted:** everything is stored in your browser's IndexedDB. *Settings → Export* writes a JSON backup file you can re-import on another browser / device. Clearing site data wipes everything, so export periodically.
+
+**Path B — Local install:** brand brains, generated ads, campaigns, checklists, performance logs all auto-save to `data/snapshot.json` in the project folder *in addition to* browser IndexedDB. Zip the folder → move to another machine → run `start` again → everything is there.
+
+**What hosted mode sends to your Vercel/Cloudflare server:**
+- The URL you typed into the brand-extraction box (so `/api/ingest` can server-side-fetch it past CORS).
+- That's it. Your AI key never touches the server — every LLM call goes directly from your browser to the LLM provider. No analytics, no telemetry, no accounts, no logging.
 
 ---
 
