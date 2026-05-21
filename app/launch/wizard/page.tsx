@@ -686,7 +686,7 @@ function Inner() {
               {running ? "Building your launch kit…" : "Build it · 10-min launch kit"}
             </button>
             {running ? (
-              <button onClick={stopWizard} className="btn-ghost" title="Stop the wizard — finished phases stay saved">
+              <button onClick={stopWizard} className="btn-ghost" title="Stop the wizard — finished phases stay saved" aria-label="Stop wizard">
                 <StopCircle size={12} />
               </button>
             ) : null}

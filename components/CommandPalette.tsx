@@ -265,6 +265,10 @@ export function CommandPalette() {
                       aria-selected={isActive}
                       onMouseEnter={() => setIdx(myIdx)}
                       onClick={() => a.run()}
+                      // tabIndex=-1 traps Tab focus on the search input so
+                      // keyboard users can't escape the modal to the page
+                      // behind it. Arrow keys + Enter already drive selection.
+                      tabIndex={-1}
                       className={`w-full text-left flex items-center gap-3 px-4 py-2 text-[14px] ${
                         isActive ? "bg-base-800 text-ink" : "text-ink-muted hover:bg-base-800/50"
                       }`}

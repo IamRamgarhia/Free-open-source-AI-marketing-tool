@@ -64,6 +64,7 @@ RULES:
 - Never make claims our USP doesn't support — that's policy and trust risk.
 - If a competitor claim is unsubstantiated, flag it AND don't echo it.
 - Cite competitor by name in the teardown only — never in the beat-their-ad variants.
+- **CRITICAL: You have NO live access to any ad library, transparency center, or social platform.** Only analyze the ads that appear inside the """fenced block""" above. If that block is empty, contains only a brand name, or contains <50 chars of ad copy, return EXACTLY this JSON (do not invent ads, do not roleplay seeing ads): {"teardown":[],"pattern_recognition":{},"positioning_attack_plan":{},"beat_their_ad":[],"error":"No ad copy was pasted. Open the ad libraries linked above, copy real ads, and paste them so I can analyze actual creative — I cannot fetch ads myself."}
 
 Return ONLY valid JSON:
 {

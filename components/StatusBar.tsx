@@ -70,7 +70,7 @@ export function StatusBar() {
 
   return (
     <div className="sticky bottom-0 z-20 border-t border-base-600 bg-base-950/85 backdrop-blur supports-[backdrop-filter]:bg-base-950/70">
-      <div className="flex items-center gap-3 px-4 md:px-10 py-2 text-[12px] text-ink-muted">
+      <div className="flex items-center gap-3 px-4 md:px-10 py-2 text-[12px] text-ink-muted flex-wrap">
         <Cell>
           <span
             className={`inline-block h-2 w-2 rounded-full ${info.hasKey ? "bg-live animate-pulse-soft" : "bg-neg"}`}

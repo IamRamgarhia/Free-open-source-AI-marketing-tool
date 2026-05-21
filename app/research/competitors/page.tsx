@@ -102,8 +102,17 @@ function Inner() {
     setSavedId(null);
     setParsed(null);
     stream.reset();
-    if (!input.competitor_ads_pasted.trim()) {
-      setError("Paste at least one competitor ad from the libraries above.");
+    // Hard guardrail against hallucinated teardowns: the LLM does NOT have live
+    // ad data. If the user submits just a brand name + empty paste, the model
+    // would invent plausible-looking ads. Require enough pasted content that
+    // the analysis is actually grounded in real copy. 120 chars ≈ one short ad.
+    const pasted = input.competitor_ads_pasted.trim();
+    if (pasted.length < 120) {
+      setError(
+        pasted.length === 0
+          ? "Paste real competitor ad copy from the libraries above before running. We do not fetch ads for you — the AI only analyzes what you paste."
+          : "Paste more competitor ad copy (at least ~120 chars / one full ad). Without real ad text, the teardown would be guesswork."
+      );
       return;
     }
     if (!input.our_product.trim() || !input.our_usp.trim()) {
@@ -244,6 +253,11 @@ function Inner() {
           </div>
           <div>
             <label className="label">competitor ads · pasted *</label>
+            <p className="text-[11px] text-ink-muted leading-relaxed mb-1.5">
+              <span className="text-live font-medium">Honesty note:</span> the AI has <em>no live access</em> to ad libraries.
+              Open the libraries above, copy the ads you want analyzed, paste them here. If you paste a brand name only,
+              the AI will refuse rather than invent ads.
+            </p>
             <textarea
               rows={8}
               className="input-base font-mono text-xs"
@@ -267,7 +281,7 @@ function Inner() {
               {running ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
               {running ? "analyzing" : "teardown + beat"}
             </button>
-            {running ? <button onClick={() => abortRef.current?.abort()} className="btn-ghost"><StopCircle size={12} /></button> : null}
+            {running ? <button onClick={() => abortRef.current?.abort()} className="btn-ghost" aria-label="Stop teardown"><StopCircle size={12} /></button> : null}
           </div>
           {savedId ? (
             <div className="text-[10px] text-pos flex items-center gap-1.5 font-mono uppercase tracking-ui-mega">
@@ -297,6 +311,24 @@ function Inner() {
 }
 
 function StealOutput({ json }: { json: any }) {
+  // Honesty path: when the prompt's CRITICAL rule fires (empty/insufficient
+  // paste), the model returns an explanatory error string instead of inventing
+  // teardowns. Surface that clearly so the user knows they need to paste real
+  // ad copy — they didn't pay tokens for hallucinated competitor data.
+  if (json?.error && !json?.teardown?.length) {
+    return (
+      <div className="border border-live/40 bg-live/[0.04] p-5 space-y-3 animate-fade-up">
+        <div className="text-[10px] font-mono uppercase tracking-ui-mega text-live flex items-center gap-2">
+          <span className="h-1 w-1 bg-live" /> nothing to analyze
+        </div>
+        <p className="text-sm text-ink leading-relaxed">{json.error}</p>
+        <p className="text-[11px] text-ink-muted">
+          Use the library buttons above (Meta Ads Library, Google Ads Transparency, TikTok Top Ads, LinkedIn Ad Library),
+          copy real ads, paste them in the textarea, and re-run.
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="space-y-4 stagger">
       {json?.teardown?.length ? (

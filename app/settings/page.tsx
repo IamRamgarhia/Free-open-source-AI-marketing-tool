@@ -399,12 +399,18 @@ function SettingsInner() {
 
 function ToggleRow({ label, desc, v, on }: { label: string; desc: string; v: boolean; on: (next: boolean) => void }) {
   return (
-    <button onClick={() => on(!v)} className="w-full flex items-center gap-3 text-left border border-base-700 px-3 py-2 hover:bg-base-800/40 transition">
+    <button
+      role="switch"
+      aria-checked={v}
+      aria-label={label}
+      onClick={() => on(!v)}
+      className="w-full flex items-center gap-3 text-left border border-base-700 px-3 py-2 hover:bg-base-800/40 transition"
+    >
       <div className="flex-1">
         <div className="text-[12px] text-ink">{label}</div>
         <div className="text-[10px] font-mono uppercase tracking-ui-wide text-ink-subtle mt-0.5">{desc}</div>
       </div>
-      <span className={`h-5 w-9 border relative ${v ? "border-live bg-live/20" : "border-base-500 bg-base-900"}`}>
+      <span className={`h-5 w-9 border relative ${v ? "border-live bg-live/20" : "border-base-500 bg-base-900"}`} aria-hidden="true">
         <span className={`absolute top-0.5 h-3.5 w-3.5 transition ${v ? "left-[18px] bg-live" : "left-0.5 bg-base-500"}`} />
       </span>
     </button>

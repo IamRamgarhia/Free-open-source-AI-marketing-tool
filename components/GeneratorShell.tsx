@@ -8,7 +8,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { CopyButton } from "@/components/CopyButton";
 import { useThrottledStream } from "@/lib/stream-hook";
 import { getApiKey, getModel, getActiveBrainId, addUsage, getLanguage, getToneOverride, getAutoSave } from "@/lib/settings";
-import { streamClaude, estimateCostUsd, tryParseJson, llmStream } from "@/lib/llm";
+import { streamClaude, estimateCostUsd, tryParseJson, llmStream, llmCall } from "@/lib/llm";
 import { getProvider, type Provider } from "@/lib/providers";
 import { getProviderKey } from "@/lib/settings";
 import { getBrain, saveAd, type GeneratedAd } from "@/lib/storage";
@@ -50,6 +50,10 @@ function Inner<I extends Record<string, unknown>>({ config, scope }: Props<I>) {
   const [warning, setWarning] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
   const [hasRun, setHasRun] = useState(false);
+  // True when the model's first reply failed schema validation and we
+  // auto-corrected via a retry round-trip. UI shows a small badge so the user
+  // knows the result is valid but came from attempt #2. (No false results.)
+  const [schemaRecovered, setSchemaRecovered] = useState(false);
   const [nextSteps, setNextSteps] = useState<NextStep[]>([]);
   const [fillToast, setFillToast] = useState<string | null>(null);
   const stream = useThrottledStream();
@@ -120,6 +124,7 @@ function Inner<I extends Record<string, unknown>>({ config, scope }: Props<I>) {
     setWarning(null);
     setSavedId(null);
     setParsed(null);
+    setSchemaRecovered(false);
     stream.reset();
 
     // Validate required fields. Image fields are required if their value is null.
@@ -231,8 +236,84 @@ function Inner<I extends Record<string, unknown>>({ config, scope }: Props<I>) {
       const finalText = res.text || stream.text;
 
       let json: any = null;
+      let finalTextOut = finalText;
       if (config.expectJson !== false) {
         json = tryParseJson(finalText);
+        // Schema-validated outputs: if a Zod schema is declared on the config,
+        // validate the parsed JSON. On failure, do ONE non-streaming retry
+        // round-trip with the validation errors so the model can self-correct.
+        // This is the "no false results" guarantee — UI either sees the
+        // expected shape or a clear error, never a partial/wrong shape that
+        // could render as junk. (See lib/llm-structured.ts for the standalone
+        // helper used by non-shell call sites.)
+        if (config.schema) {
+          const candidate = json;
+          const first = config.schema.safeParse(candidate);
+          if (first.success) {
+            json = first.data;
+          } else {
+            // Retry: send the original prompt + the assistant's wrong reply
+            // + a corrective hint. Non-streaming so we don't double-render.
+            const issues = first.error.issues
+              .slice(0, 8)
+              .map((i: any) => `- ${i.path.join(".") || "<root>"}: ${i.message}`)
+              .join("\n");
+            try {
+              const retry = await (fallbackProvider
+                ? llmCall({
+                    system,
+                    messages: [
+                      { role: "user", content: prompt },
+                      { role: "assistant", content: (finalText || "").slice(0, 8000) },
+                      {
+                        role: "user",
+                        content: `Your previous reply did not match the required JSON shape. Fix these issues and return ONLY the corrected JSON — no prose, no markdown, no code fences:\n\n${issues}`,
+                      },
+                    ],
+                    maxTokens: config.maxTokens ?? 3000,
+                    temperature: 0.2,
+                    signal: controller.signal,
+                    providerOverride: fallbackProvider,
+                    apiKeyOverride: fallbackKey,
+                  })
+                : llmCall({
+                    system,
+                    messages: [
+                      { role: "user", content: prompt },
+                      { role: "assistant", content: (finalText || "").slice(0, 8000) },
+                      {
+                        role: "user",
+                        content: `Your previous reply did not match the required JSON shape. Fix these issues and return ONLY the corrected JSON — no prose, no markdown, no code fences:\n\n${issues}`,
+                      },
+                    ],
+                    maxTokens: config.maxTokens ?? 3000,
+                    temperature: 0.2,
+                    signal: controller.signal,
+                  }));
+              const retryCost = estimateCostUsd(retry.providerId, retry.modelId, retry.usage);
+              addUsage(retryCost, retry.usage?.input_tokens ?? 0, retry.usage?.output_tokens ?? 0);
+              window.dispatchEvent(new Event("ados:usage"));
+              const retried = tryParseJson(retry.text ?? "");
+              const second = retried !== null ? config.schema.safeParse(retried) : null;
+              if (second?.success) {
+                json = second.data;
+                finalTextOut = retry.text ?? finalText;
+                setSchemaRecovered(true);
+              } else {
+                setError(
+                  "Model returned a shape we couldn't use, even after a correction pass. Try a different provider — Claude / GPT / Gemini are most reliable for structured output."
+                );
+                json = null;
+              }
+            } catch (retryErr: any) {
+              if (retryErr?.name === "AbortError") throw retryErr;
+              setError(
+                "Schema validation failed and the correction pass also failed. Try again or switch providers."
+              );
+              json = null;
+            }
+          }
+        }
         setParsed(json);
       }
 
@@ -245,7 +326,7 @@ function Inner<I extends Record<string, unknown>>({ config, scope }: Props<I>) {
           title: config.buildTitle(input),
           input: input as unknown as Record<string, unknown>,
           output_json: json,
-          output_text: finalText,
+          output_text: finalTextOut,
           model_id: res.modelId,
           usage_input_tokens: res.usage?.input_tokens ?? 0,
           usage_output_tokens: res.usage?.output_tokens ?? 0,
@@ -390,7 +471,7 @@ function Inner<I extends Record<string, unknown>>({ config, scope }: Props<I>) {
                 <span className="ml-auto kbd hidden md:inline-flex">⌘↵</span>
               </button>
               {running ? (
-                <button onClick={stop} className="btn-ghost" title="Stop">
+                <button onClick={stop} className="btn-ghost" title="Stop" aria-label="Stop generation">
                   <StopCircle size={12} />
                 </button>
               ) : null}
@@ -405,7 +486,7 @@ function Inner<I extends Record<string, unknown>>({ config, scope }: Props<I>) {
         </section>
 
         <section className="lg:col-span-3 space-y-4">
-          <OutputArea running={running} stream={stream.text} parsed={parsed} config={config as unknown as GeneratorConfig<Record<string, unknown>>} hasRun={hasRun} lastError={error} />
+          <OutputArea running={running} stream={stream.text} parsed={parsed} config={config as unknown as GeneratorConfig<Record<string, unknown>>} hasRun={hasRun} lastError={error} schemaRecovered={schemaRecovered} />
           {savedId && nextSteps.length ? <NextStepsPanel steps={nextSteps} /> : null}
         </section>
       </div>
@@ -474,25 +555,32 @@ const FieldRenderer = memo(function FieldRenderer({
   onChange: (v: unknown) => void;
 }) {
   const span = field.span === 2 || field.kind === "textarea" ? "col-span-2" : "col-span-2 md:col-span-1";
+  // Deterministic id so the <label htmlFor> binds to the input. Without this,
+  // screen readers announce inputs as unlabeled. (A11y audit fix.)
+  const inputId = `field-${field.name}`;
   return (
     <div className={span}>
-      <label className="label">
+      <label className="label" htmlFor={inputId}>
         {field.label}
         {field.required ? " *" : ""}
       </label>
       {field.kind === "textarea" ? (
         <textarea
+          id={inputId}
           rows={field.rows ?? 3}
           className="input-base"
           placeholder={field.placeholder}
           value={(value as string) ?? ""}
           onChange={(e) => onChange(e.target.value)}
+          aria-required={field.required || undefined}
         />
       ) : field.kind === "select" ? (
         <select
+          id={inputId}
           className="input-base"
           value={(value as string) ?? ""}
           onChange={(e) => onChange(e.target.value)}
+          aria-required={field.required || undefined}
         >
           {field.options?.map((o) => (
             <option key={o.value} value={o.value}>
@@ -502,20 +590,24 @@ const FieldRenderer = memo(function FieldRenderer({
         </select>
       ) : field.kind === "number" ? (
         <input
+          id={inputId}
           type="number"
           className="input-base tabular"
           placeholder={field.placeholder}
           value={(value as number | string) ?? ""}
           onChange={(e) => onChange(e.target.value === "" ? "" : Number(e.target.value))}
+          aria-required={field.required || undefined}
         />
       ) : field.kind === "image" ? (
-        <ImageInput value={value as ImagePart | null} onChange={onChange} placeholder={field.placeholder} />
+        <ImageInput value={value as ImagePart | null} onChange={onChange} placeholder={field.placeholder} inputId={inputId} />
       ) : (
         <input
+          id={inputId}
           className="input-base"
           placeholder={field.placeholder}
           value={(value as string) ?? ""}
           onChange={(e) => onChange(e.target.value)}
+          aria-required={field.required || undefined}
         />
       )}
       {field.hint ? <p className="text-[10px] text-ink-subtle mt-1 font-mono uppercase tracking-ui-wide">{field.hint}</p> : null}
@@ -527,10 +619,12 @@ function ImageInput({
   value,
   onChange,
   placeholder,
+  inputId,
 }: {
   value: ImagePart | null;
   onChange: (v: ImagePart | null) => void;
   placeholder?: string;
+  inputId?: string;
 }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -584,10 +678,12 @@ function ImageInput({
       </button>
       <input
         ref={inputRef}
+        id={inputId}
         type="file"
         accept="image/png,image/jpeg,image/webp,image/gif"
         className="hidden"
         onChange={(e) => handle(e.target.files?.[0])}
+        aria-label={placeholder ?? "Upload image"}
       />
       {err ? <p className="text-[10px] text-neg mt-1 font-mono uppercase tracking-ui-wide">{err}</p> : null}
     </div>
@@ -635,6 +731,7 @@ const OutputArea = memo(function OutputArea<I extends Record<string, unknown>>({
   config,
   hasRun,
   lastError,
+  schemaRecovered,
 }: {
   running: boolean;
   stream: string;
@@ -642,6 +739,7 @@ const OutputArea = memo(function OutputArea<I extends Record<string, unknown>>({
   config: GeneratorConfig<I>;
   hasRun: boolean;
   lastError?: string | null;
+  schemaRecovered?: boolean;
 }) {
   // Detect a rate-limit error from common provider phrasings so we can give a
   // direct, actionable message instead of generic "your key may be invalid".
@@ -708,6 +806,15 @@ const OutputArea = memo(function OutputArea<I extends Record<string, unknown>>({
     return (
       <div className="space-y-4 animate-fade-up">
         <FrameworkMetaPill json={parsed} />
+        {schemaRecovered ? (
+          <div
+            role="status"
+            className="text-[11px] font-mono uppercase tracking-ui-mega text-live border border-live/30 bg-live/[0.04] px-2 py-1 inline-block"
+            title="The model's first reply didn't match the expected structure, so we automatically re-asked it to correct the JSON. Content below was returned by the second attempt."
+          >
+            ↻ ai output auto-corrected (schema retry)
+          </div>
+        ) : null}
         {config.renderJson(parsed)}
         <div className="flex items-center justify-end gap-2">
           <CopyButton text={stream} label="copy raw output" />

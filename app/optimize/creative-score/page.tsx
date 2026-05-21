@@ -4,6 +4,7 @@ import { GeneratorShell } from "@/components/GeneratorShell";
 import { Section, Pill, ScoreBar } from "@/components/OutputBlocks";
 import { CopyButton } from "@/components/CopyButton";
 import { buildCreativeScorePrompt, type CreativeScoreInput } from "@/lib/prompts/creative-score";
+import { CreativeScoreSchema } from "@/lib/schemas/creative-score";
 import type { GeneratorConfig } from "@/lib/generator-config";
 
 const config: GeneratorConfig<CreativeScoreInput & Record<string, unknown>> = {
@@ -37,6 +38,7 @@ const config: GeneratorConfig<CreativeScoreInput & Record<string, unknown>> = {
   buildPrompt: (input) => buildCreativeScorePrompt(input as unknown as CreativeScoreInput),
   buildTitle: (i: any) => `Score · ${i.platform}`,
   expectJson: true,
+  schema: CreativeScoreSchema,
   renderJson: (json) => <ScoreOutput json={json} />,
 };
 

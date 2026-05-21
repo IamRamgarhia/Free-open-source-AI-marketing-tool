@@ -67,6 +67,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`dark ${sans.variable} ${mono.variable} ${display.variable}`}>
       <body className="font-sans antialiased">
+        {/* Skip-to-content for keyboard + screen-reader users — visually
+            hidden until focused, then jumps past the sidebar / mobile nav. */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:bg-base-900 focus:text-ink focus:px-3 focus:py-2 focus:border focus:border-live"
+        >
+          Skip to main content
+        </a>
         <div className="flex min-h-screen">
           <Sidebar />
           <MobileNav />
@@ -74,7 +82,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <LocalSyncBoot />
           <CommandPalette />
           <UndoToast />
-          <main className="flex-1 min-w-0 flex flex-col">
+          <main id="main-content" className="flex-1 min-w-0 flex flex-col">
             <div className="flex-1 px-4 md:px-10 pt-14 md:pt-6 pb-14">{children}</div>
             <StatusBar />
           </main>

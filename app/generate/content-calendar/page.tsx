@@ -5,6 +5,7 @@ import { Section, Pill } from "@/components/OutputBlocks";
 import { CopyButton } from "@/components/CopyButton";
 import { ExternalLink } from "lucide-react";
 import { buildContentCalendarPrompt, type ContentCalendarInput } from "@/lib/prompts/content-calendar";
+import { ContentCalendarSchema } from "@/lib/schemas/content-calendar";
 import { IMAGE_TOOLS, VIDEO_TOOLS } from "@/lib/prompts/creative-prompts";
 import { safeHref } from "@/lib/utils";
 import type { GeneratorConfig } from "@/lib/generator-config";
@@ -48,6 +49,7 @@ const config: GeneratorConfig<ContentCalendarInput & Record<string, unknown>> = 
   buildPrompt: (input) => buildContentCalendarPrompt(input as unknown as ContentCalendarInput),
   buildTitle: (i: any) => `Calendar · ${i.duration} · ${i.platforms?.slice(0, 24)}`,
   expectJson: true,
+  schema: ContentCalendarSchema,
   renderJson: (json) => <CalendarOutput json={json} />,
 };
 

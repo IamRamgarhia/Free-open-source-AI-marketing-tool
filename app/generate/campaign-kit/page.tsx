@@ -4,6 +4,7 @@ import { GeneratorShell } from "@/components/GeneratorShell";
 import { Section, Pill } from "@/components/OutputBlocks";
 import { CopyButton } from "@/components/CopyButton";
 import { buildCampaignKitPrompt, type CampaignKitInput } from "@/lib/prompts/campaign-kit";
+import { CampaignKitSchema } from "@/lib/schemas/campaign-kit";
 import type { GeneratorConfig } from "@/lib/generator-config";
 
 const config: GeneratorConfig<CampaignKitInput & Record<string, unknown>> = {
@@ -25,6 +26,7 @@ const config: GeneratorConfig<CampaignKitInput & Record<string, unknown>> = {
   buildPrompt: (input) => buildCampaignKitPrompt(input as unknown as CampaignKitInput),
   buildTitle: (i: any) => `Kit · ${i.campaign_name}`,
   expectJson: true,
+  schema: CampaignKitSchema,
   renderJson: (json) => <KitOutput json={json} />,
 };
 

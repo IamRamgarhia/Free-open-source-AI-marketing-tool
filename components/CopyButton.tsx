@@ -17,6 +17,8 @@ export function CopyButton({
   return (
     <button
       type="button"
+      aria-live="polite"
+      aria-label={copied ? `${label} — copied` : `${label} to clipboard`}
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(text);
@@ -25,7 +27,9 @@ export function CopyButton({
         } catch {}
       }}
       className={cn(
-        "inline-flex items-center gap-1.5 border border-base-600 bg-base-900/60 hover:bg-base-800 px-2 py-1 text-[10px] font-mono uppercase tracking-ui-wide text-ink-muted hover:text-ink",
+        // py-2 mobile / py-1 desktop hits 44px tap target on touch devices
+        // without bloating dense desktop layouts.
+        "inline-flex items-center gap-1.5 border border-base-600 bg-base-900/60 hover:bg-base-800 px-2 py-2 md:py-1 text-[10px] font-mono uppercase tracking-ui-wide text-ink-muted hover:text-ink",
         className
       )}
     >
