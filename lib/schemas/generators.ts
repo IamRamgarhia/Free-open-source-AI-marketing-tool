@@ -587,3 +587,131 @@ export const QualityScoreSchema = z
     landing_page_checklist: z.array(z.any()).optional(),
   })
   .passthrough();
+
+// ──────────────────────────────────────────────────────────────────────────
+// /suggestions — custom page (not GeneratorShell). Used via validateOrRetry.
+// ──────────────────────────────────────────────────────────────────────────
+export const SuggestionsSchema = z
+  .object({
+    campaigns: z
+      .array(
+        Loose({
+          platform: z.string(),
+          objective: z.string(),
+          monthly_budget_usd: z.union([z.number(), z.string()]),
+          name: z.string(),
+          why_this_brand: z.string(),
+          target_audience: z.string(),
+          kpi_targets: z.record(z.any()),
+          hooks: Strings,
+          adOS_workflow: z.array(Loose({ step: z.string(), url: z.string() })),
+        })
+      )
+      .min(1),
+    content_calendar_starter: z
+      .array(
+        Loose({
+          day: z.union([z.number(), z.string()]),
+          platform: z.string(),
+          hook: z.string(),
+          pillar: z.string(),
+        })
+      )
+      .optional(),
+    quick_wins: z
+      .array(Loose({ tactic: z.string(), where: z.string(), expected_impact: z.string() }))
+      .optional(),
+    thirty_day_plan: z
+      .array(
+        Loose({
+          week: z.union([z.number(), z.string()]),
+          focus: z.string(),
+          spend_usd: z.union([z.number(), z.string()]),
+          deliverables: Strings,
+        })
+      )
+      .optional(),
+    no_go: z.array(Loose({ platform_or_tactic: z.string(), reason: z.string() })).optional(),
+    open_questions: Strings.optional(),
+  })
+  .passthrough();
+
+// ──────────────────────────────────────────────────────────────────────────
+// /research/competitors teardown response (separate from the input-validation
+// hardening already shipped). When the prompt's CRITICAL clause fires, the
+// model returns { error, teardown:[], ... } — the schema accepts both shapes.
+// ──────────────────────────────────────────────────────────────────────────
+const TeardownItem = Loose({
+  competitor_ad_summary: z.string(),
+  angle: z.string(),
+  hook_formula: z.string(),
+  promise: z.string(),
+  proof: z.string(),
+  emotional_trigger: z.string(),
+  cta_mechanic: z.string(),
+  weakness: z.string(),
+});
+export const CompetitorStealSchema = z
+  .object({
+    teardown: z.array(TeardownItem).optional(),
+    pattern_recognition: z.record(z.any()).optional(),
+    positioning_attack_plan: z.record(z.any()).optional(),
+    beat_their_ad: z
+      .array(
+        Loose({
+          label: z.string(),
+          strategy: z.string(),
+          hook: z.string(),
+          body: z.string(),
+          cta: z.string(),
+          char_count_primary: z.number(),
+          why_this_beats_them: z.string(),
+        })
+      )
+      .optional(),
+    // Honesty-path error when the user submitted no real ad copy.
+    error: z.string().optional(),
+  })
+  .passthrough();
+
+// ──────────────────────────────────────────────────────────────────────────
+// Brand extraction (BrandBrainForm) — returns Partial<BrandBrain>. Every
+// field is optional because the form's mergeFillEmpty pipeline handles gaps.
+// Schema's only job: catch "model returned a non-object" or "returned an
+// array instead of an object" so the merge doesn't blow up.
+// ──────────────────────────────────────────────────────────────────────────
+export const BrandExtractionSchema = z
+  .object({
+    name: z.string().optional(),
+    business_name: z.string().optional(),
+    industry: z.string().optional(),
+    niche: z.string().optional(),
+    products: z.union([Strings, z.string()]).optional(),
+    platforms: z.union([Strings, z.string()]).optional(),
+    content_pillars: z.union([Strings, z.string()]).optional(),
+    social_links: z.record(z.string()).optional(),
+    tone: z.string().optional(),
+    personality_traits: z.union([Strings, z.string()]).optional(),
+    writing_style: z.string().optional(),
+    words_to_use: z.union([Strings, z.string()]).optional(),
+    words_to_avoid: z.union([Strings, z.string()]).optional(),
+    audience_who: z.string().optional(),
+    audience_pain_points: z.union([Strings, z.string()]).optional(),
+    audience_desires: z.union([Strings, z.string()]).optional(),
+    audience_demographics: z.string().optional(),
+    service_area: z.string().optional(),
+    usp: z.string().optional(),
+    key_benefits: z.union([Strings, z.string()]).optional(),
+    key_messages: z.union([Strings, z.string()]).optional(),
+    objections: z.union([Strings, z.string()]).optional(),
+    objection_handling: z.union([Strings, z.string()]).optional(),
+    competitors: z.union([Strings, z.string()]).optional(),
+    differentiators: z.union([Strings, z.string()]).optional(),
+    price_positioning: z.string().optional(),
+    voc_phrases: z.union([Strings, z.string()]).optional(),
+    voc_pain_quotes: z.union([Strings, z.string()]).optional(),
+    voc_success_quotes: z.union([Strings, z.string()]).optional(),
+    best_performing_angles: z.union([Strings, z.string()]).optional(),
+    failed_angles: z.union([Strings, z.string()]).optional(),
+  })
+  .passthrough();

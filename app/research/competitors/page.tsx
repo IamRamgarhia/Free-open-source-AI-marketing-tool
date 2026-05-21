@@ -10,6 +10,8 @@ import { ProviderSwitcher } from "@/components/ProviderSwitcher";
 import { useThrottledStream } from "@/lib/stream-hook";
 import { getApiKey, getActiveBrainId, addUsage } from "@/lib/settings";
 import { llmStream, estimateCostUsd, tryParseJson } from "@/lib/llm";
+import { validateOrRetry, StructuredLlmError } from "@/lib/llm-structured";
+import { CompetitorStealSchema } from "@/lib/schemas/generators";
 import { getBrain, saveAd, type GeneratedAd } from "@/lib/storage";
 import { buildBrandSystemPrompt, type BrandBrain } from "@/lib/brand-brain";
 import { buildCompetitorStealPrompt, type CompetitorStealInput } from "@/lib/prompts/competitor-steal";
@@ -65,6 +67,7 @@ function Inner() {
   const [parsed, setParsed] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
+  const [schemaRecovered, setSchemaRecovered] = useState(false);
   const stream = useThrottledStream();
   const abortRef = useRef<AbortController | null>(null);
 
@@ -101,6 +104,7 @@ function Inner() {
     setError(null);
     setSavedId(null);
     setParsed(null);
+    setSchemaRecovered(false);
     stream.reset();
     // Hard guardrail against hallucinated teardowns: the LLM does NOT have live
     // ad data. If the user submits just a brand name + empty paste, the model
@@ -132,21 +136,52 @@ function Inner() {
       // through the active provider, but the explicit dependency makes future
       // provider-aware features (vision fallback, model override) trivial.
       // (Audit finding #26.)
+      const system = buildBrandSystemPrompt(brain);
+      const prompt = buildCompetitorStealPrompt(input);
       const res = await llmStream(
         {
-          system: buildBrandSystemPrompt(brain),
-          messages: [{ role: "user", content: buildCompetitorStealPrompt(input) }],
+          system,
+          messages: [{ role: "user", content: prompt }],
           maxTokens: 4000,
           temperature: 0.7,
           signal: controller.signal,
         },
         { onDelta: stream.append }
       );
-      const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
+      let cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
       addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
       window.dispatchEvent(new Event("ados:usage"));
-      const finalText = res.text || stream.text;
-      const json = tryParseJson(finalText);
+      let finalText = res.text || stream.text;
+      // Schema validate + retry on shape failure. Accepts both the normal
+      // teardown shape and the honesty-path error shape (where the model
+      // refused to invent ads because no real ad copy was pasted).
+      let json: any;
+      try {
+        const v = await validateOrRetry({
+          schema: CompetitorStealSchema,
+          raw: finalText,
+          system,
+          originalPrompt: prompt,
+          signal: controller.signal,
+          maxTokens: 4000,
+        });
+        json = v.data;
+        if (v.recovered) {
+          setSchemaRecovered(true);
+          cost += v.costUsd;
+          addUsage(v.costUsd, v.usage?.input_tokens ?? 0, v.usage?.output_tokens ?? 0);
+          window.dispatchEvent(new Event("ados:usage"));
+          finalText = v.raw;
+        }
+      } catch (vErr) {
+        if (vErr instanceof StructuredLlmError) {
+          setError(
+            "Teardown couldn't be parsed even after a correction pass. Try a different provider — Claude / GPT / Gemini are most reliable for structured output."
+          );
+          return;
+        }
+        throw vErr;
+      }
       setParsed(json);
       const ad: GeneratedAd = {
         id: crypto.randomUUID(),
@@ -298,6 +333,15 @@ function Inner() {
           {!running && !stream.text && !parsed ? (
             <div className="border border-dashed border-base-600 bg-base-900/20 text-[11px] font-mono uppercase tracking-ui-mega text-ink-faint min-h-[260px] grid place-items-center">
               teardown + 3 variants will appear here
+            </div>
+          ) : null}
+          {schemaRecovered && parsed ? (
+            <div
+              role="status"
+              className="text-[11px] font-mono uppercase tracking-ui-mega text-live border border-live/30 bg-live/[0.04] px-2 py-1 inline-block"
+              title="The model's first reply didn't match the expected structure, so we automatically re-asked it to correct the JSON. Content below was returned by the second attempt."
+            >
+              ↻ ai output auto-corrected (schema retry)
             </div>
           ) : null}
           {parsed ? <StealOutput json={parsed} /> : stream.text ? (

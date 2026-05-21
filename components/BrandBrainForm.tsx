@@ -7,6 +7,8 @@ import { emptyBrandBrain, type BrandBrain } from "@/lib/brand-brain";
 import { saveBrain } from "@/lib/storage";
 import { setActiveBrainId, addUsage } from "@/lib/settings";
 import { llmCall, estimateCostUsd, tryParseJson } from "@/lib/llm";
+import { validateOrRetry, StructuredLlmError } from "@/lib/llm-structured";
+import { BrandExtractionSchema } from "@/lib/schemas/generators";
 import { buildBrandExtractionPrompt } from "@/lib/prompts/brand-extraction";
 import { buildSearchAugmentedPrompt } from "@/lib/prompts/brand-search-augmented";
 import { ingestUrl, ingestSubpages, detectSocial } from "@/lib/url-ingest";
@@ -132,10 +134,34 @@ export function BrandBrainForm({ initial }: Props) {
         temperature: 0.4,
         signal: abortRef.current.signal,
       });
-      const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
+      let cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
       addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
       window.dispatchEvent(new Event("ados:usage"));
-      const parsed = tryParseJson<Partial<BrandBrain>>(res.text);
+      // Schema validate + retry on bad shape. Brand extraction is the most
+      // failure-prone surface (long JSON, many optional fields, providers
+      // often emit a leading sentence). The retry catches those.
+      let parsed: Partial<BrandBrain> | null = null;
+      try {
+        const v = await validateOrRetry({
+          schema: BrandExtractionSchema,
+          raw: res.text ?? "",
+          originalPrompt: prompt,
+          signal: abortRef.current.signal,
+          maxTokens: 3000,
+        });
+        parsed = v.data as Partial<BrandBrain>;
+        if (v.recovered) {
+          cost += v.costUsd;
+          addUsage(v.costUsd, v.usage?.input_tokens ?? 0, v.usage?.output_tokens ?? 0);
+          window.dispatchEvent(new Event("ados:usage"));
+        }
+      } catch (vErr) {
+        if (vErr instanceof StructuredLlmError) {
+          setError("Model returned non-JSON even after a correction pass. You can edit fields manually.");
+          return;
+        }
+        throw vErr;
+      }
       if (!parsed) {
         setError("Model returned non-JSON. You can edit fields manually.");
         return;

@@ -51,8 +51,23 @@ export function Pill({
     neg: "border-neg/40 text-neg",
     info: "border-info/40 text-info",
   };
+  // Color-only state is invisible to color-blind users. When the pill carries
+  // state via tone (not just decoration), expose the semantic via aria-label
+  // so screen readers + assistive tech announce "warning: kill", "good: scale"
+  // etc. — not just "kill".
+  const toneAnnounce: Record<string, string> = {
+    default: "",
+    live: "active: ",
+    pos: "good: ",
+    neg: "warning: ",
+    info: "info: ",
+  };
+  const announce = toneAnnounce[tone];
   return (
-    <span className={`inline-flex items-center gap-1.5 border bg-base-900/30 px-2 py-1 text-[11px] ${toneMap[tone]}`}>
+    <span
+      className={`inline-flex items-center gap-1.5 border bg-base-900/30 px-2 py-1 text-[11px] ${toneMap[tone]}`}
+      aria-label={announce ? `${announce}${label ? `${label} ` : ""}${text}` : undefined}
+    >
       {label ? <span className="font-mono uppercase tracking-ui-mega text-[9px] text-ink-faint">{label}</span> : null}
       {text}
     </span>

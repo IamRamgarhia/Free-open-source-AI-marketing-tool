@@ -12,6 +12,8 @@ import { getCurrency } from "@/lib/currency";
 import { useThrottledStream } from "@/lib/stream-hook";
 import { getActiveBrainId, addUsage } from "@/lib/settings";
 import { llmStream, estimateCostUsd, tryParseJson } from "@/lib/llm";
+import { validateOrRetry, StructuredLlmError } from "@/lib/llm-structured";
+import { SuggestionsSchema } from "@/lib/schemas/generators";
 import { getBrain, saveAd, type GeneratedAd } from "@/lib/storage";
 import { buildBrandSystemPrompt, type BrandBrain } from "@/lib/brand-brain";
 import { buildSuggestedCampaignsPrompt } from "@/lib/prompts/suggested-campaigns";
@@ -30,6 +32,7 @@ function Inner() {
   const [parsed, setParsed] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
+  const [schemaRecovered, setSchemaRecovered] = useState(false);
   const stream = useThrottledStream();
   const abortRef = useRef<AbortController | null>(null);
 
@@ -68,29 +71,62 @@ function Inner() {
     setError(null);
     setParsed(null);
     setSavedId(null);
+    setSchemaRecovered(false);
     stream.reset();
     setRunning(true);
     const controller = new AbortController();
     abortRef.current = controller;
     try {
+      const system = buildBrandSystemPrompt(b);
+      const prompt = buildSuggestedCampaignsPrompt(b);
       const res = await llmStream(
         {
-          system: buildBrandSystemPrompt(b),
-          messages: [{ role: "user", content: buildSuggestedCampaignsPrompt(b) }],
+          system,
+          messages: [{ role: "user", content: prompt }],
           maxTokens: 5500,
           temperature: 0.75,
           signal: controller.signal,
         },
         { onDelta: stream.append }
       );
-      const cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
+      let cost = estimateCostUsd(res.providerId, res.modelId, res.usage);
       addUsage(cost, res.usage?.input_tokens ?? 0, res.usage?.output_tokens ?? 0);
       window.dispatchEvent(new Event("ados:usage"));
       // Some providers (Gemini) sometimes return res.text empty even when
       // streaming worked. Fall back to the accumulated stream buffer so the
       // saved ad always has the actual generated content.
-      const finalText = res.text || stream.text;
-      const json = tryParseJson(finalText);
+      let finalText = res.text || stream.text;
+      // Schema-validate + retry once if shape is wrong. Mirrors GeneratorShell
+      // so suggestions get the same "no false results" guarantee — without
+      // this, a malformed `campaigns` array would crash the renderer's
+      // .map() call on undefined.
+      let json: any;
+      try {
+        const v = await validateOrRetry({
+          schema: SuggestionsSchema,
+          raw: finalText,
+          system,
+          originalPrompt: prompt,
+          signal: controller.signal,
+          maxTokens: 5500,
+        });
+        json = v.data;
+        if (v.recovered) {
+          setSchemaRecovered(true);
+          cost += v.costUsd;
+          addUsage(v.costUsd, v.usage?.input_tokens ?? 0, v.usage?.output_tokens ?? 0);
+          window.dispatchEvent(new Event("ados:usage"));
+          finalText = v.raw;
+        }
+      } catch (vErr) {
+        if (vErr instanceof StructuredLlmError) {
+          setError(
+            "Model returned a shape we couldn't use, even after a correction pass. Try a different provider — Claude / GPT / Gemini are most reliable for structured output."
+          );
+          return;
+        }
+        throw vErr;
+      }
       setParsed(json);
       const ad: GeneratedAd = {
         id: crypto.randomUUID(),
@@ -166,6 +202,15 @@ function Inner() {
         </div>
       ) : null}
 
+      {schemaRecovered && parsed ? (
+        <div
+          role="status"
+          className="text-[11px] font-mono uppercase tracking-ui-mega text-live border border-live/30 bg-live/[0.04] px-2 py-1 inline-block mb-3"
+          title="The model's first reply didn't match the expected structure, so we automatically re-asked it to correct the JSON. Content below was returned by the second attempt."
+        >
+          ↻ ai output auto-corrected (schema retry)
+        </div>
+      ) : null}
       {parsed ? <SuggestionsOutput json={parsed} /> : stream.text ? (
         <div className="border border-base-600 bg-base-900/40 p-5">
           <pre className="text-xs whitespace-pre-wrap font-mono leading-relaxed text-ink caret">{stream.text}</pre>

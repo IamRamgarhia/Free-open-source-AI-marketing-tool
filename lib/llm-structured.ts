@@ -199,3 +199,95 @@ export function validateLlmJson<S extends ZodTypeAny>(
   if (parsed.success) return { ok: true, data: parsed.data };
   return { ok: false, issues: parsed.error.issues, raw };
 }
+
+/**
+ * Helper for non-GeneratorShell pages (suggestions, competitors teardown,
+ * BrandBrainForm extraction) that stream the first attempt for UX, then need
+ * the same retry-on-schema-fail behavior as the shell. Wraps:
+ *  1. validateLlmJson on the streamed response
+ *  2. If invalid, one non-streaming corrective round-trip
+ *  3. Returns { data, recovered, costUsd, usage } or throws StructuredLlmError
+ *
+ * Usage:
+ *   const streamRes = await llmStream(...)
+ *   const v = await validateOrRetry({
+ *     schema, raw: streamRes.text || stream.text,
+ *     system, originalPrompt,
+ *     signal: controller.signal,
+ *   });
+ *   // v.data is schema-valid; v.recovered tells you if it took a retry.
+ */
+export async function validateOrRetry<S extends ZodTypeAny>(opts: {
+  schema: S;
+  raw: string;
+  system?: string;
+  originalPrompt: string;
+  signal?: AbortSignal;
+  providerOverride?: Provider;
+  modelOverride?: string;
+  apiKeyOverride?: string;
+  maxTokens?: number;
+}): Promise<{
+  data: z.infer<S>;
+  raw: string;
+  recovered: boolean;
+  costUsd: number;
+  usage: LLMUsage | null;
+  providerId: string;
+  modelId: string;
+}> {
+  const first = validateLlmJson(opts.raw, opts.schema);
+  if (first.ok) {
+    return {
+      data: first.data,
+      raw: opts.raw,
+      recovered: false,
+      costUsd: 0,
+      usage: null,
+      providerId: "",
+      modelId: "",
+    };
+  }
+  // Build corrective re-prompt.
+  const fixHint = first.issues
+    ? `Your previous reply did not match the required JSON shape. Fix these issues and return ONLY the corrected JSON — no prose, no markdown, no code fences:\n\n${summarizeIssues(
+        first.issues
+      )}`
+    : "Your previous reply was not valid JSON. Return ONLY a valid JSON value matching the requested shape — no prose, no markdown, no code fences.";
+  const retry = await llmCall({
+    system: opts.system,
+    messages: [
+      { role: "user", content: opts.originalPrompt },
+      { role: "assistant", content: (opts.raw || "").slice(0, 8000) },
+      { role: "user", content: fixHint },
+    ],
+    maxTokens: opts.maxTokens ?? 3000,
+    temperature: 0.2,
+    signal: opts.signal,
+    providerOverride: opts.providerOverride,
+    modelOverride: opts.modelOverride,
+    apiKeyOverride: opts.apiKeyOverride,
+  });
+  const second = validateLlmJson(retry.text ?? "", opts.schema);
+  if (!second.ok) {
+    throw new StructuredLlmError({
+      message: second.issues
+        ? "Model returned a shape that does not match the schema after a correction pass."
+        : "Model returned non-JSON after a correction pass.",
+      raw: retry.text ?? "",
+      zodIssues: second.issues,
+      providerId: retry.providerId,
+      modelId: retry.modelId,
+      attempts: 2,
+    });
+  }
+  return {
+    data: second.data,
+    raw: retry.text ?? "",
+    recovered: true,
+    costUsd: estimateCostUsd(retry.providerId, retry.modelId, retry.usage),
+    usage: retry.usage,
+    providerId: retry.providerId,
+    modelId: retry.modelId,
+  };
+}

@@ -230,9 +230,24 @@ function StepTour({ idx, setIdx }: { idx: number; setIdx: (n: number) => void })
       </div>
       <h2 className="font-display italic text-3xl text-ink leading-tight">{s.title}</h2>
       <p className="text-sm text-ink-muted mt-4 leading-relaxed">{s.body}</p>
-      <div className="mt-6 flex gap-1">
+      <div className="mt-6 flex gap-1" role="tablist" aria-label="Tour slides">
         {TOUR_SLIDES.map((_, i) => (
-          <button key={i} onClick={() => setIdx(i)} className={`h-1 w-12 transition ${i === idx ? "bg-live" : i < idx ? "bg-live/40" : "bg-base-600 hover:bg-base-500"}`} aria-label={`Slide ${i + 1}`} />
+          // Wrapping the 4px-tall bar in a py-3 button gives a 28px+ tap area
+          // without changing the visual design. Touch users can hit it.
+          <button
+            key={i}
+            type="button"
+            role="tab"
+            aria-selected={i === idx}
+            onClick={() => setIdx(i)}
+            className="py-3 px-0 transition group"
+            aria-label={`Slide ${i + 1} of ${TOUR_SLIDES.length}`}
+          >
+            <span
+              className={`block h-1 w-12 transition ${i === idx ? "bg-live" : i < idx ? "bg-live/40" : "bg-base-600 group-hover:bg-base-500"}`}
+              aria-hidden="true"
+            />
+          </button>
         ))}
       </div>
     </div>
