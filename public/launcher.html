@@ -513,6 +513,31 @@
   loadConfig();
   poll();
   setInterval(poll, 1500);
+
+  // Browser auto-refresh: when the user relaunches AdForge from the desktop,
+  // the sidecar restarts with a fresh SESSION_TOKEN. Detect the change here
+  // so an already-open tab reloads itself — turns "click app icon" into
+  // "app opens / refreshes" with no manual F5.
+  let knownSession = null;
+  async function checkSession() {
+    try {
+      const r = await fetch("/health", { cache: "no-store" });
+      if (!r.ok) return;
+      const h = await r.json();
+      if (!h?.session_token) return;
+      if (knownSession === null) {
+        knownSession = h.session_token;
+        return;
+      }
+      if (h.session_token !== knownSession) {
+        knownSession = h.session_token;
+        // Soft reload — preserve scroll, keep form state if any.
+        window.location.reload();
+      }
+    } catch {}
+  }
+  setInterval(checkSession, 2000);
+  checkSession();
 })();
 </script>
 </body>

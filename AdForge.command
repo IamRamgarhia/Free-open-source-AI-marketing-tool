@@ -28,14 +28,10 @@ if [ ! -d node_modules ]; then
   npm install --no-audit --no-fund
 fi
 
-# 3. Default .env.local (resolve-ports.cjs may shift these later if conflicts)
-if [ ! -f .env.local ]; then
-  cat > .env.local <<EOF
-# AdForge configuration (default - resolve-ports.cjs may shift if conflicts)
-PORT=3005
-ADFORGE_SYNC_PORT=3006
-EOF
-fi
+# .env.local is NOT seeded here — the port resolver below detects first-run
+# (no .env.local) and asks the OS for ports the kernel just confirmed are
+# free. That skips the contested 3000-range entirely so we never collide
+# with Next.js / Vite / Express / Rails / Flask running locally.
 
 mkdir -p data
 

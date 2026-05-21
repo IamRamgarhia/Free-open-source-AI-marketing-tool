@@ -33,8 +33,49 @@ const { spawn } = require("child_process");
 
 const PORT = Number(process.env.ADFORGE_SYNC_PORT || process.env.ADOS_SYNC_PORT || 3006);
 const PROJECT_ROOT = path.resolve(__dirname, "..");
-const DATA_DIR = path.join(PROJECT_ROOT, "data");
+// Per-user data dir: snapshots + lock file live in the OS's user-level
+// config dir (%APPDATA%\AdForge on Windows, ~/Library/Application Support
+// /AdForge on macOS, ~/.config/adforge on Linux). This means upgrading
+// AdForge — even re-cloning into a new folder — never loses the user's
+// saved snapshot. Aligns with native-app conventions.
+//
+// First boot migrates any legacy ./data/snapshot.json from the install
+// folder into the new location so existing users don't lose state.
+function resolveUserDataDir() {
+  // Allow override via env for testing / unusual setups.
+  if (process.env.ADFORGE_DATA_DIR) return process.env.ADFORGE_DATA_DIR;
+  const plat = process.platform;
+  const home = os.homedir();
+  if (plat === "win32") {
+    return path.join(process.env.APPDATA || path.join(home, "AppData", "Roaming"), "AdForge");
+  }
+  if (plat === "darwin") {
+    return path.join(home, "Library", "Application Support", "AdForge");
+  }
+  // Linux + others: XDG_CONFIG_HOME or fallback to ~/.config
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(home, ".config"), "adforge");
+}
+
+const DATA_DIR = resolveUserDataDir();
+const LEGACY_DATA_DIR = path.join(PROJECT_ROOT, "data");
 const SNAPSHOT_PATH = path.join(DATA_DIR, "snapshot.json");
+
+// One-time migration: if the user has a legacy ./data/snapshot.json from a
+// previous AdForge version AND no new-location snapshot yet, move it.
+function migrateLegacyDataDirOnce() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    const legacy = path.join(LEGACY_DATA_DIR, "snapshot.json");
+    if (fs.existsSync(legacy) && !fs.existsSync(SNAPSHOT_PATH)) {
+      fs.copyFileSync(legacy, SNAPSHOT_PATH);
+      // Don't delete the legacy file — leaves a breadcrumb if user wants it.
+      console.log(`[adforge] migrated legacy snapshot ${legacy} → ${SNAPSHOT_PATH}`);
+    }
+  } catch (e) {
+    console.warn(`[adforge] data-dir migration failed (non-fatal): ${e?.message ?? e}`);
+  }
+}
+migrateLegacyDataDirOnce();
 const LAUNCHER_HTML = path.join(PROJECT_ROOT, "public", "launcher.html");
 const ENV_LOCAL = path.join(PROJECT_ROOT, ".env.local");
 const MAX_BODY = 25 * 1024 * 1024;
@@ -620,7 +661,8 @@ const server = http.createServer(async (req, res) => {
         port: PORT,
         cwd: PROJECT_ROOT,
         capabilities: ["status", "snapshot", "config", "web/start", "web/stop", "web/restart", "web/rebuild", "diagnostics", "update/check", "update/apply", "update/status", "ingest"],
-        sidecar_version: "2026.05.ef96b97+", // bump this when adding new endpoints
+        sidecar_version: "2026.05.7fd6c23+", // bump this when adding new endpoints
+        session_token: SESSION_TOKEN,
       });
     }
 
@@ -922,6 +964,47 @@ const server = http.createServer(async (req, res) => {
 // Pick up the configured web port at boot so /status is correct
 // before the user clicks Start.
 try { webPort = envPort(readEnvLocal().PORT, 3005); } catch {}
+
+// Single-instance lock. If another sidecar from THIS install is already
+// running (same PID still alive), exit early — the launcher script will
+// open the browser. Prevents the "user double-clicks AdForge.bat twice in
+// 2 seconds" race where two processes both try to writeEnvLocal.
+const LOCK_FILE = path.join(DATA_DIR, ".adforge.pid");
+function acquireSingletonLock() {
+  try {
+    if (fs.existsSync(LOCK_FILE)) {
+      const oldPid = Number(fs.readFileSync(LOCK_FILE, "utf8").trim());
+      if (oldPid > 0) {
+        try {
+          // Signal 0 → exists check, throws ESRCH if dead. Cross-platform.
+          process.kill(oldPid, 0);
+          // Process alive → another instance owns the lock.
+          console.error(`[adforge] another sidecar (pid ${oldPid}) is already running for this install. Exiting.`);
+          process.exit(0);
+        } catch {
+          // Process dead → stale lock, safe to take over.
+        }
+      }
+    }
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(LOCK_FILE, String(process.pid), "utf8");
+    const cleanup = () => { try { fs.unlinkSync(LOCK_FILE); } catch {} };
+    process.on("exit", cleanup);
+    process.on("SIGINT", () => { cleanup(); process.exit(0); });
+    process.on("SIGTERM", () => { cleanup(); process.exit(0); });
+  } catch (e) {
+    // Non-fatal — if the lockfile can't be created, fall through and let
+    // listen() fail with EADDRINUSE if there really is a duplicate.
+    console.warn(`[adforge] could not acquire singleton lock: ${e?.message ?? e}`);
+  }
+}
+acquireSingletonLock();
+
+// Session token bumps every time the sidecar starts. The browser polls
+// /health (via /status), sees a new SESSION_TOKEN, and reloads itself.
+// That means "user clicks AdForge.bat after a system restart" gives them
+// a fresh page in the already-open browser tab — no manual refresh needed.
+const SESSION_TOKEN = String(Date.now());
 
 // Surface EADDRINUSE clearly — resolve-ports.cjs has a TOCTOU window between
 // the port-free probe and listen(). If another process grabs the port in that

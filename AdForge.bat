@@ -43,11 +43,9 @@ if not exist node_modules (
         exit /b 1
     )
 )
-if not exist .env.local (
-    > .env.local echo # AdForge configuration ^(default - resolve-ports.cjs may shift if conflicts^)
-    >> .env.local echo PORT=3005
-    >> .env.local echo ADFORGE_SYNC_PORT=3006
-)
+REM .env.local is NOT seeded here — the port resolver below detects first-run
+REM (no .env.local) and asks the OS for ports the kernel just confirmed are
+REM free. That avoids the 3000-range collision storm entirely.
 if not exist data mkdir data
 
 REM Desktop shortcut on first run

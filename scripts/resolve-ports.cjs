@@ -30,8 +30,29 @@ const http = require("http");
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const ENV_LOCAL = path.join(PROJECT_ROOT, ".env.local");
 
+// Default port range: 41573-49999. Chosen because:
+//   - 3000-9000 is the most-collided range (every Next.js / Express / Rails /
+//     Flask / Vite dev server lives there). New AdForge users hit collisions
+//     immediately and the resolver has to shift on every launch.
+//   - 41573+ is in IANA's "registered but rarely used" range. Almost nothing
+//     else binds there.
+//   - We derive a starting offset from a hash of the install folder so two
+//     AdForge installs in different folders begin at different bases and
+//     don't race to claim the same pair before the OS-probe step.
+function defaultStartPort() {
+  let h = 0;
+  for (const ch of PROJECT_ROOT) {
+    h = ((h << 5) - h + ch.charCodeAt(0)) | 0;
+  }
+  // 41573-49998 in 8425-port band (yields 4212 pair slots)
+  const offset = Math.abs(h) % 8424;
+  return 41573 + (offset & ~1); // even alignment
+}
+
+const DEFAULT_PORT_RANGE_START = defaultStartPort();
+
 function readEnv() {
-  const out = { PORT: "3005", ADFORGE_SYNC_PORT: "3006" };
+  const out = { PORT: String(DEFAULT_PORT_RANGE_START), ADFORGE_SYNC_PORT: String(DEFAULT_PORT_RANGE_START + 1) };
   if (!fs.existsSync(ENV_LOCAL)) return out;
   for (const line of fs.readFileSync(ENV_LOCAL, "utf8").split(/\r?\n/)) {
     const t = line.trim();
@@ -80,6 +101,39 @@ function isPortFree(port) {
   });
 }
 
+/** Ask the OS for an ephemeral free port. Binds to :0, reads the assigned
+ *  port, immediately releases it. Used on truly-first run so we never even
+ *  start in the contested 3000-range. */
+function askOsForFreePort() {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once("error", () => resolve(null));
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address();
+      const port = (addr && typeof addr === "object") ? addr.port : null;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+/** Get two consecutive ports the OS believes are free. We can't ask for
+ *  consecutive ports atomically, so: ask for one, then walk +1 / +2 until we
+ *  find an adjacent free port. Almost always succeeds on the first try. */
+async function askOsForFreePair() {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const base = await askOsForFreePort();
+    if (!base) continue;
+    // Prefer even base so web port stays even, sync stays odd.
+    const web = base % 2 === 0 ? base : base - 1;
+    const sync = web + 1;
+    if (web < 1024) continue; // skip privileged ports
+    if (await isPortFree(web) && await isPortFree(sync)) {
+      return { web, sync };
+    }
+  }
+  return null;
+}
+
 async function findFreePair(startFrom) {
   // Start at startFrom (rounded up to even), walk in pairs. The web port is
   // even, the sync port is odd — keeps the relationship obvious.
@@ -100,9 +154,24 @@ function normalize(p) {
 
 (async () => {
   try {
+    // First-run path: no .env.local yet → ask the OS for two ports the kernel
+    // just confirmed are free at this moment. Zero collision risk because we
+    // skip the contested 3000-range entirely.
+    const firstRun = !fs.existsSync(ENV_LOCAL);
+    if (firstRun) {
+      const fresh = await askOsForFreePair();
+      if (fresh) {
+        writeEnv({ PORT: String(fresh.web), ADFORGE_SYNC_PORT: String(fresh.sync) });
+        process.stdout.write(`ACTION=start PORT=${fresh.web} SYNC=${fresh.sync} REASON=first_run_os_assigned\n`);
+        return;
+      }
+      // OS-port-probe failed (extremely rare). Fall through to hash-based
+      // default which still avoids the 3000-range.
+    }
+
     const env = readEnv();
-    const desiredWeb = Number(env.PORT) || 3005;
-    const desiredSync = Number(env.ADFORGE_SYNC_PORT) || 3006;
+    const desiredWeb = Number(env.PORT) || DEFAULT_PORT_RANGE_START;
+    const desiredSync = Number(env.ADFORGE_SYNC_PORT) || (DEFAULT_PORT_RANGE_START + 1);
 
     const health = await probeHealth(desiredSync);
     const ourCwd = normalize(PROJECT_ROOT);
@@ -126,7 +195,7 @@ function normalize(p) {
       // It's SOMEONE ELSE'S sidecar on the port we wanted (theirCwd mismatch,
       // OR theirCwd missing because they're running an older sidecar that
       // doesn't return cwd). Either way, leave them alone and pick a new pair.
-      const pair = await findFreePair(Math.max(3010, desiredSync + 2));
+      const pair = await findFreePair(Math.max(DEFAULT_PORT_RANGE_START, desiredSync + 2));
       if (!pair) {
         process.stdout.write(`ACTION=error REASON=no_free_port_pair\n`);
         return;
@@ -146,7 +215,7 @@ function normalize(p) {
 
     // One or both ports are bound by something non-AdForge (a different web app,
     // a stalled process, etc.). Shift to the next free pair.
-    const pair = await findFreePair(Math.max(3010, desiredSync + 2));
+    const pair = await findFreePair(Math.max(DEFAULT_PORT_RANGE_START, desiredSync + 2));
     if (!pair) {
       process.stdout.write(`ACTION=error REASON=no_free_port_pair\n`);
       return;
