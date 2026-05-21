@@ -74,7 +74,20 @@ You **bring your own AI key** — free-tier (Groq · Gemini · Cerebras · OpenR
 
 ---
 
-## Install in 60 seconds
+## Use it now — two paths
+
+Pick the one that fits you. Both are 100% free, BYOK, and store your work in your browser only — no accounts, no servers we operate, no telemetry.
+
+### Path A · Hosted (zero install, 30 seconds)
+
+Deploy your own private instance to Vercel or Cloudflare in one click. Free tier covers it easily.
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIamRamgarhia%2FAdForge)
+[![Deploy to Cloudflare Pages](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https%3A%2F%2Fgithub.com%2FIamRamgarhia%2FAdForge)
+
+What you get: your own URL (`yourname.vercel.app`), nothing to install, works on any device with a browser including mobile + tablet. The app auto-detects hosted mode and uses a built-in `/api/ingest` route (server-side fetch for the URL reader) instead of the local sidecar. **Storage is browser-only IndexedDB** — click *Settings → Export* periodically to back up to a JSON file.
+
+### Path B · Install locally (offline, auto-disk-backup)
 
 You need **Node.js 20+** ([download here](https://nodejs.org/en/download)). That's the only prerequisite — the one-liner below installs everything else.
 

@@ -2,14 +2,19 @@
  * URL ingest with multi-reader fallback.
  *
  * Strategy:
- *   1. Jina Reader (https://r.jina.ai) — best quality, returns clean markdown. Has free-tier rate
+ *   1. Local sidecar (local install only) OR /api/ingest Next route (hosted
+ *      mode only) — server-side fetch, no CORS, no third-party dependency.
+ *   2. Jina Reader (https://r.jina.ai) — best quality, returns clean markdown. Has free-tier rate
  *      limits; users can add a paid Jina key in Settings for higher quotas.
- *   2. AllOrigins (https://api.allorigins.win) — free CORS proxy returning raw HTML; we strip it
+ *   3. AllOrigins (https://api.allorigins.win) — free CORS proxy returning raw HTML; we strip it
  *      down in-browser. No key, no rate limit, but messier output.
- *   3. If both fail, we return a clear error and the UI offers a manual paste box.
+ *   4. If all fail, we return a clear error and the UI offers a manual paste box.
  *
- * Runs 100% in the user's browser. No backend.
+ * Runs 100% in the user's browser when local. In hosted mode, /api/ingest
+ * does a server-side HTTP GET to bypass CORS — that's the only network call
+ * that touches our server, and it only sees the public URL the user typed.
  */
+import { isHostedMode } from "./env";
 export interface IngestMetadata {
   title?: string;
   description?: string;
@@ -65,17 +70,24 @@ function sidecarOrigin(): string {
   return "http://127.0.0.1:3006";
 }
 
+function serverProxyUrl(target: string): string {
+  // In hosted mode, hit the Next.js API route — same-origin, no CORS, runs
+  // server-side on Vercel/Cloudflare. In local mode, hit the sidecar on
+  // 127.0.0.1:3006. Both expose the same /ingest API shape.
+  return isHostedMode()
+    ? `/api/ingest?url=${encodeURIComponent(target)}`
+    : `${sidecarOrigin()}/ingest?url=${encodeURIComponent(target)}`;
+}
+
 /**
- * Server-side fetch via the local sidecar — bypasses Jina quotas + browser
- * CORS sandbox. Most reliable path when external readers are rate-limited
- * or the user's network blocks them.
+ * Server-side fetch — bypasses Jina quotas + browser CORS sandbox. In local
+ * mode this is the sidecar on 127.0.0.1:3006; in hosted mode it's the
+ * /api/ingest Next route. Most reliable path when external readers are
+ * rate-limited or the user's network blocks them.
  */
 async function trySidecar(target: string, signal?: AbortSignal): Promise<IngestOutcome> {
   try {
-    const res = await fetch(
-      `${sidecarOrigin()}/ingest?url=${encodeURIComponent(target)}`,
-      { method: "GET", signal }
-    );
+    const res = await fetch(serverProxyUrl(target), { method: "GET", signal });
     // Specific case: sidecar is running but doesn't have /ingest (old version).
     // Tell the user to restart the launcher so it picks up the new code.
     if (res.status === 404) {
@@ -114,7 +126,9 @@ async function trySidecar(target: string, signal?: AbortSignal): Promise<IngestO
     return {
       ok: false,
       recoverable: true,
-      message: "Sidecar unreachable on 127.0.0.1:3006 — is the launcher running?",
+      message: isHostedMode()
+        ? "Server-side reader unreachable. The hosted /api/ingest route returned an error."
+        : "Sidecar unreachable on 127.0.0.1:3006 — is the launcher running?",
     };
   }
 }

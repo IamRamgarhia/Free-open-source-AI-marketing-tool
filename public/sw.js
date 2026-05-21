@@ -55,6 +55,10 @@ self.addEventListener("fetch", (event) => {
     }
   }
 
+  // Never cache /api/* responses — these are dynamic (URL ingest, etc.) and
+  // caching them would serve a stale page when the user re-ingests a URL.
+  if (url.pathname.startsWith("/api/")) return;
+
   // Only GETs cached.
   if (event.request.method !== "GET") return;
 

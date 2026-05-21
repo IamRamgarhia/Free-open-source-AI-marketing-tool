@@ -11,6 +11,8 @@
  * API keys are NOT synced by default (security). Toggle in Settings to include.
  */
 
+import { isHostedMode } from "./env";
+
 // 127.0.0.1 instead of "localhost" so IPv6-preferring systems (some Windows
 // configs) don't resolve to ::1 while the sidecar listens on 127.0.0.1 only.
 // Matches url-ingest.ts. (Audit finding #49.)
@@ -220,6 +222,10 @@ export function debouncedPush(): void {
  */
 export async function bootLocalSync(): Promise<{ enabled: boolean; pulled: boolean; reason?: string }> {
   if (_booted || !isBrowser()) return { enabled: _booted, pulled: false };
+  // In hosted mode, skip the network probe + interval timer entirely. The
+  // sidecar can't exist when the app is served from a non-loopback origin,
+  // so probing it is pure waste (~1 failed fetch per page load).
+  if (isHostedMode()) return { enabled: false, pulled: false, reason: "hosted mode (no sidecar)" };
   const ok = await detectSync();
   if (!ok) {
     return { enabled: false, pulled: false, reason: "sync sidecar not running" };

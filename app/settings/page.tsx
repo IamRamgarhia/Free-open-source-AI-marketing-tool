@@ -18,6 +18,7 @@ import { testApiKey } from "@/lib/llm";
 import { exportAll, importAll, wipeAll } from "@/lib/storage";
 import { formatCost, formatTokens } from "@/lib/utils";
 import { CURRENCIES, getCurrencyCode, setCurrencyCode } from "@/lib/currency";
+import { isHostedMode } from "@/lib/env";
 import { getProviderLimits } from "@/lib/provider-limits";
 
 export default function SettingsPage() {
@@ -335,12 +336,16 @@ function SettingsInner() {
             </div>
             <ToggleRow label="character-count warnings" desc="badges when output exceeds platform limits" v={charWarn} on={persistCharWarn} />
             <ToggleRow label="auto-save to history" desc="every generation goes into /history automatically" v={autoSave} on={persistAutoSave} />
-            <ToggleRow
-              label="include API keys in folder sync"
-              desc="off by default · turn ON to make the data/ folder fully portable across machines (security tradeoff)"
-              v={syncKeys}
-              on={persistSyncKeys}
-            />
+            {/* Folder-sync only exists when the local sidecar is running.
+                In hosted mode this toggle has nothing to act on. */}
+            {!isHostedMode() ? (
+              <ToggleRow
+                label="include API keys in folder sync"
+                desc="off by default · turn ON to make the data/ folder fully portable across machines (security tradeoff)"
+                v={syncKeys}
+                on={persistSyncKeys}
+              />
+            ) : null}
             <div className="pt-3 border-t border-base-700">
               <label className="label">jina reader api key (optional)</label>
               <input
@@ -374,6 +379,16 @@ function SettingsInner() {
 
           <section className="border border-base-600 bg-base-900/40 p-5 space-y-3">
             <h2 className="text-[10px] font-mono uppercase tracking-ui-mega text-ink-muted">data</h2>
+            {isHostedMode() ? (
+              <div className="border border-info/40 bg-info/[0.06] px-3 py-2 text-[11px] text-info leading-relaxed">
+                <strong>Hosted mode:</strong> brand brains + history live only in this browser's
+                IndexedDB. Clearing site data wipes everything. Export below and re-import on
+                a new browser / device to move your work. Want auto-backup to disk?{" "}
+                <a href="https://github.com/IamRamgarhia/AdForge#install-in-60-seconds" target="_blank" rel="noreferrer" className="underline">
+                  install locally
+                </a>.
+              </div>
+            ) : null}
             <p className="text-[11px] font-mono uppercase tracking-ui-wide text-ink-subtle">
               backups include brand brains + history. api keys NOT included.
             </p>
