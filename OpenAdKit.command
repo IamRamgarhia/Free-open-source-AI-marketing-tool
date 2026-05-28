@@ -68,8 +68,8 @@ WEB_PORT=$(echo "$RESOLVED" | grep -oE 'PORT=[0-9]+' | head -1 | cut -d= -f2)
 if [ -z "$ACTION" ]; then
   echo "[ERROR] Port resolver failed to run. Falling back to defaults."
   ACTION="start"
-  SYNC_PORT="${SYNC_PORT:-3006}"
-  WEB_PORT="${WEB_PORT:-3005}"
+  SYNC_PORT="${SYNC_PORT:-41574}"
+  WEB_PORT="${WEB_PORT:-41573}"
 fi
 
 if [ "$ACTION" = "error" ]; then

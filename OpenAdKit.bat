@@ -12,7 +12,7 @@ REM   2. On first run, install deps + write default .env.local + create Desktop 
 REM   3. Spawn sidecar hidden (PowerShell Start-Process -WindowStyle Hidden).
 REM   4. Wait for /health, open browser to the launcher.
 REM
-REM Two OpenAdKit installs in different folders never fight over port 3006 —
+REM Two OpenAdKit installs in different folders never fight over the same port —
 REM the second one detects the first and auto-shifts to the next free pair.
 
 setlocal EnableDelayedExpansion
@@ -115,18 +115,44 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM --- Wait for /health on the resolved port ---
+REM --- Wait for sidecar /health on SYNC port, THEN wait for Next dev on WEB port ---
+REM The sidecar auto-starts the Next dev server on boot, so by the time
+REM /health returns 200 the web app is either already up or compiling.
+echo Starting OpenAdKit web app (first run takes 20-40s while Next compiles)...
 set /a TRIES=0
-:wait
+:wait_sidecar
 set /a TRIES+=1
 powershell -NoProfile -Command ^
   "try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Uri 'http://127.0.0.1:!SYNC!/health' | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
-if not errorlevel 1 goto :ready
+if not errorlevel 1 goto :wait_web
 if !TRIES! GEQ 30 goto :fail
 powershell -NoProfile -Command "Start-Sleep -Milliseconds 750" >nul 2>&1
-goto :wait
+goto :wait_sidecar
+
+:wait_web
+REM Sidecar is alive. Now wait for the web app itself on PORT — Next dev's
+REM cold-compile can take 30s on slower machines. Up to 90s total.
+set /a WTRIES=0
+:wait_web_loop
+set /a WTRIES+=1
+powershell -NoProfile -Command ^
+  "try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Uri 'http://127.0.0.1:!PORT!/' | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
+if not errorlevel 1 goto :ready
+if !WTRIES! GEQ 120 goto :fallback_launcher
+powershell -NoProfile -Command "Start-Sleep -Milliseconds 750" >nul 2>&1
+goto :wait_web_loop
 
 :ready
+REM Open browser DIRECTLY to the app, not the launcher panel.
+start "" "http://127.0.0.1:!PORT!/"
+exit /b 0
+
+:fallback_launcher
+REM Web app didn't come up in time — open the control panel so user can see
+REM the build log and retry. Better than failing silently.
+echo.
+echo [WARN] Web app didn't respond within 90 seconds. Opening control panel.
+echo   Click the Start button there once the Next build finishes.
 start "" "http://127.0.0.1:!SYNC!/"
 exit /b 0
 

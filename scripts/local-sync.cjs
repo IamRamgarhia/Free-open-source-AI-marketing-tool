@@ -31,7 +31,11 @@ const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 
-const PORT = Number(process.env.ADFORGE_SYNC_PORT || process.env.ADOS_SYNC_PORT || 3006);
+// Fallback port: 41574 is in IANA's "registered but rarely used" range.
+// Nothing well-known binds there, so collision-free for users with many local
+// dev servers. The launcher's resolve-ports.cjs always sets this via env var
+// before exec; this default only fires if you start the sidecar by hand.
+const PORT = Number(process.env.ADFORGE_SYNC_PORT || process.env.ADOS_SYNC_PORT || 41574);
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 // Per-user data dir: snapshots + lock file live in the OS's user-level
 // config dir (%APPDATA%\OpenAdKit on Windows, ~/Library/Application Support
@@ -108,7 +112,7 @@ const MAX_BODY = 25 * 1024 * 1024;
 // --- State ---
 let webChild = null;
 let webStatus = "down"; // 'down' | 'starting' | 'up' | 'stopping'
-let webPort = 3005; // overwritten from .env.local right below
+let webPort = 41573; // overwritten from .env.local right below (high-range default avoids collision with other dev servers)
 let webStartedAt = 0;
 let webLastLog = "";
 
@@ -142,7 +146,7 @@ function envPort(value, fallback) {
 }
 
 function readEnvLocal() {
-  if (!fs.existsSync(ENV_LOCAL)) return { PORT: "3005", ADFORGE_SYNC_PORT: String(PORT) };
+  if (!fs.existsSync(ENV_LOCAL)) return { PORT: "41573", ADFORGE_SYNC_PORT: String(PORT) };
   const out = {};
   for (const line of fs.readFileSync(ENV_LOCAL, "utf8").split(/\r?\n/)) {
     const t = line.trim();
@@ -151,7 +155,7 @@ function readEnvLocal() {
     if (eq < 0) continue;
     out[t.slice(0, eq).trim()] = t.slice(eq + 1).trim();
   }
-  return { PORT: out.PORT || "3005", ADFORGE_SYNC_PORT: out.ADFORGE_SYNC_PORT || String(PORT) };
+  return { PORT: out.PORT || "41573", ADFORGE_SYNC_PORT: out.ADFORGE_SYNC_PORT || String(PORT) };
 }
 
 function writeEnvLocal(updates) {
@@ -277,7 +281,7 @@ function startWeb() {
     return { ok: false, error: "already running" };
   }
   const env = readEnvLocal();
-  webPort = Number(env.PORT) || 3005;
+  webPort = Number(env.PORT) || 41573;
   webStatus = "starting";
   webStartedAt = Date.now();
   webLastLog = "";
@@ -988,7 +992,7 @@ const server = http.createServer(async (req, res) => {
 
 // Pick up the configured web port at boot so /status is correct
 // before the user clicks Start.
-try { webPort = envPort(readEnvLocal().PORT, 3005); } catch {}
+try { webPort = envPort(readEnvLocal().PORT, 41573); } catch {}
 
 // Single-instance lock. If another sidecar from THIS install is already
 // running (same PID still alive), exit early — the launcher script will
@@ -1048,6 +1052,19 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`[openadkit] launcher + sync listening on http://127.0.0.1:${PORT}`);
   console.log(`[openadkit] open the launcher: http://127.0.0.1:${PORT}/`);
   console.log(`[openadkit] snapshot file:     ${SNAPSHOT_PATH}`);
+  // Truly-one-click UX: spawn the Next dev server as soon as the sidecar is
+  // up so the user doesn't have to click "Start" in the launcher panel.
+  // The launcher's own buttons still work for stop / restart / clean rebuild,
+  // but the first paint after double-click is the app itself, not a control
+  // panel. Opt-out via ADFORGE_NO_AUTOSTART=1 for power users who want to
+  // edit code before the dev server boots.
+  if (process.env.ADFORGE_NO_AUTOSTART !== "1") {
+    console.log("[openadkit] auto-starting Next dev server (set ADFORGE_NO_AUTOSTART=1 to disable)");
+    const res = startWeb();
+    if (!res.ok) {
+      console.warn(`[openadkit] auto-start failed (non-fatal): ${res.error}. Use the launcher to retry.`);
+    }
+  }
 });
 
 process.on("SIGINT", () => { stopWeb(); console.log("[openadkit] shutting down"); server.close(() => process.exit(0)); });

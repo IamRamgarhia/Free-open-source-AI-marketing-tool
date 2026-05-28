@@ -5,7 +5,7 @@
  * unrelated processes) may already occupy the default ports.
  *
  * Decision logic:
- *   1. Read PORT + ADFORGE_SYNC_PORT from .env.local (or default 3005/3006).
+ *   1. Read PORT + ADFORGE_SYNC_PORT from .env.local (or hash-derived high-range default; see defaultStartPort()).
  *   2. Probe ADFORGE_SYNC_PORT for /health.
  *        - Responds AND has "ingest" AND cwd matches this install   → "reuse"
  *        - Responds AND has "ingest" AND cwd is a different folder  → shift to a free port pair

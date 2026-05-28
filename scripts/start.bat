@@ -15,8 +15,8 @@ if not exist node_modules (
 REM Make sure data folder exists
 if not exist data mkdir data
 
-REM Load SYNC_PORT from .env.local (default 3006)
-set "SYNC_PORT=3006"
+REM Load SYNC_PORT from .env.local (default 41574 — high-range, collision-free)
+set "SYNC_PORT=41574"
 if exist .env.local (
     for /f "tokens=2 delims==" %%a in ('findstr /b "ADFORGE_SYNC_PORT=" .env.local 2^>nul') do set "SYNC_PORT=%%a"
 )

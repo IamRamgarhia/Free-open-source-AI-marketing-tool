@@ -27,6 +27,13 @@ NOTES.md
 TODO.md
 scratch/
 internal/
+AUDIT-*.md
+PRODUCT-AUDIT-*.md
+INSTALL-LAUNCH-*.md
+EXTERNAL-AUDIT-*.md
+TEST-SCENARIOS.md
+*.audit.md
+*.planning.md
 
 # Playwright artifacts
 test-results/
